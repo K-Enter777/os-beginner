@@ -1,0 +1,20 @@
+[package]
+name = "mikan-os"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "mikan-os"
+test = false
+bench = false
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[dependencies]
+r-efi = "4.3"
+utf16_literal = "0.2"
