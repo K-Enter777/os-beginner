@@ -1,5 +1,5 @@
 {
 	"rust-analyzer.linkedProjects": [
-		"./01/rust/Cargo.toml"
+		"./02/mikan-os/Cargo.toml"
 	],
 }
