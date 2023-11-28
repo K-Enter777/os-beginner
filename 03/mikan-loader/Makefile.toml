@@ -1,0 +1,28 @@
+[config]
+skip_core_tasks = true
+
+[tasks.default]
+dependencies = ["run"]
+
+[tasks.build]
+command = "cargo"
+args = ["build", "--release"]
+
+[tasks.run]
+command = "../../devenv/run_qemu.sh"
+args = ["target/x86_64-unknown-uefi/release/mikan-loader.efi"]
+dependencies = ["build"]
+
+[tasks.clean]
+dependencies = ["cargo_clean", "file_clean"]
+
+[tasks.cargo_clean]
+command = "cargo"
+args = ["clean"]
+
+[tasks.file_clean]
+script = ['''
+#!/bin/bash
+rm disk.img
+rmdir mnt
+''']
