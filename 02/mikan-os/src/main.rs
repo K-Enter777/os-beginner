@@ -1,155 +1,168 @@
 #![no_std]
 #![no_main]
 
-use core::{ffi::c_void, panic::PanicInfo, ptr::null_mut};
-use r_efi::{
-    efi::{self, Guid, PhysicalAddress},
-    protocols::{file, loaded_image, shell::FileHandle, simple_file_system},
-    system::{BootOpenProtocol, OPEN_PROTOCOL_BY_HANDLE_PROTOCOL},
+mod chars;
+
+use crate::chars::*;
+use core::{fmt::Write, mem::size_of};
+use uefi::{
+    prelude::*,
+    proto::{
+        loaded_image::LoadedImage,
+        media::{
+            file::{Directory, File, FileAttribute, FileMode, RegularFile},
+            fs::SimpleFileSystem,
+        },
+    },
+    table::boot::{
+        MemoryDescriptor, MemoryMap, MemoryType, OpenProtocolAttributes, OpenProtocolParams,
+    },
+    CStr16,
 };
-use utf16_literal::utf16;
 
-struct MemoryMap {
-    buffer_size: usize,
-    buffer: *mut efi::MemoryDescriptor,
-    map_size: usize,
-    map_key: usize,
-    descriptor_size: usize,
-    descriptor_version: u32,
-}
+fn save_memory_map(
+    system_table: &mut SystemTable<Boot>,
+    map: &MemoryMap,
+    file: &mut RegularFile,
+) -> Status {
+    let mut buf16 = [0u16; 128];
+    let mut str16_buf = Str16Buf::new(&mut buf16);
 
-fn get_memory_map(get_memory_map: efi::BootGetMemoryMap, map: &mut MemoryMap) -> efi::Status {
-    if map.buffer.is_null() {
-        return efi::Status::BUFFER_TOO_SMALL;
-    }
+    let header = b"Index, Type, Type(name), PhysicalStart, NumberOfPages, Attribute\n";
+    let _ = file.write(header);
 
-    map.map_size = map.buffer_size;
-    get_memory_map(
-        map.map_size as *mut usize,
-        map.buffer,
-        map.map_key as *mut usize,
-        map.descriptor_size as *mut usize,
-        map.descriptor_version as *mut u32,
-    )
-}
-
-fn oepn_root_dir(
-    open_protocol: BootOpenProtocol,
-    image_handle: efi::Handle,
-    root: *mut *mut file::Protocol,
-) -> efi::Status {
-    let loaded_image: *mut loaded_image::Protocol = null_mut();
-    let fs: *mut simple_file_system::Protocol = null_mut();
-
-    let mut guid = loaded_image::PROTOCOL_GUID;
-    open_protocol(
-        image_handle,
-        &mut guid as *mut efi::Guid,
-        loaded_image as *mut *mut c_void,
-        image_handle,
-        null_mut(),
-        OPEN_PROTOCOL_BY_HANDLE_PROTOCOL,
+    let _ = write!(
+        str16_buf,
+        "map->buffer = {:08x}, map->map_size = {:08x}\r\n",
+        map as *const MemoryMap as usize,
+        size_of::<MemoryDescriptor>() * map.entries().count()
     );
+    let _ = system_table.stdout().output_string(str16_buf.into_cstr16());
 
-    let mut guid = simple_file_system::PROTOCOL_GUID;
-    unsafe {
-        open_protocol(
-            (*loaded_image).device_handle,
-            &mut guid as *mut Guid,
-            fs as *mut *mut c_void,
-            image_handle,
-            null_mut(),
-            OPEN_PROTOCOL_BY_HANDLE_PROTOCOL,
-        );
-    }
-
-    unsafe { ((*fs).open_volume)(fs, root) }
-}
-
-fn save_memory_map(map: &MemoryMap, file: *mut file::Protocol) -> efi::Status {
-    let buf = [0u8; 256];
-    let header = b"Index, Type, Type(name), PhysicalStart, NumberOfPages, Attribute\n\0";
-
-    let mut len = header.len();
-    unsafe {
-        ((*file).write)(file, &mut len as *mut usize, header.as_ptr() as *mut c_void);
-    }
-
-    // TODO: print
-
-    let mut iter = map.buffer as PhysicalAddress;
     let mut i = 0;
-    while iter < map.buffer as PhysicalAddress + map.map_size as PhysicalAddress {
-        unsafe {
-            let desc = *map.buffer;
-
-            let mut buf = [0u16; 256];
-        }
-
-        iter += map.descriptor_size as PhysicalAddress;
+    let mut entries = map.entries();
+    while let Some(desc) = entries.next() {
+        let mut buf8 = [0u8; 256];
+        let mut str8_buf = Str8Buf::new(&mut buf8);
+        let _ = write!(
+            str8_buf,
+            "{}, {}, {}, {:08x}, {}, {}\n",
+            i,
+            desc.ty.0,
+            get_memory_type_unicode(desc.ty),
+            desc.phys_start,
+            desc.page_count,
+            desc.att.bits()
+        );
+        let _ = file.write(str8_buf.get());
         i += 1;
     }
 
-    efi::Status::SUCCESS
+    Status::SUCCESS
 }
 
-#[export_name = "efi_main"]
-pub extern "C" fn efi_main(
-    image_handle: efi::Handle,
-    system_table: *mut efi::SystemTable,
-) -> efi::Status {
-    let buf = utf16!("Hello, world!\n\0");
-    unsafe {
-        ((*(*system_table).con_out).output_string)(
-            (*system_table).con_out,
-            buf.as_ptr() as *mut efi::Char16,
-        )
-    };
-
-    let mut memmap_buf = [efi::MemoryDescriptor {
-        r#type: 0,
-        physical_start: 0,
-        virtual_start: 0,
-        number_of_pages: 0,
-        attribute: 0,
-    }; 410];
-    let mut memmap = MemoryMap {
-        buffer_size: memmap_buf.len(),
-        buffer: memmap_buf.as_mut_ptr(),
-        map_size: 0,
-        map_key: 0,
-        descriptor_size: 0,
-        descriptor_version: 0,
-    };
-    unsafe {
-        get_memory_map((*(*system_table).boot_services).get_memory_map, &mut memmap);
+fn get_memory_map<'a>(services: &BootServices, map: &'a mut [u8]) -> uefi::Result<MemoryMap<'a>> {
+    if map.len() == 0 {
+        return Err(uefi::Error::new(Status::BUFFER_TOO_SMALL, ()));
     }
 
-    let mut root_dir: *mut file::Protocol = null_mut();
-    unsafe {
-        oepn_root_dir(
-            (*(*system_table).boot_services).open_protocol,
-            image_handle,
-            &mut root_dir as *mut *mut file::Protocol,
-        );
-    }
-
-    let mut memmap_file: *mut file::Protocol = null_mut();
-    let s = utf16!("\\memmap");
-    unsafe {
-        ((*root_dir).open)(
-            root_dir,
-            &mut memmap_file as *mut *mut file::Protocol,
-            s.as_ptr() as *mut u16,
-            file::MODE_READ | file::MODE_WRITE | file::MODE_CREATE,
-            0,
-        );
-    }
-
-    loop {}
+    Ok(services.memory_map(map)?)
 }
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn get_memory_type_unicode(r#type: MemoryType) -> &'static CStr16 {
+    match r#type {
+        MemoryType::RESERVED => cstr16!("EfiReservedMemoryType"),
+        MemoryType::LOADER_CODE => cstr16!("EfiLoaderCode"),
+        MemoryType::LOADER_DATA => cstr16!("EfiLoaderData"),
+        MemoryType::BOOT_SERVICES_CODE => cstr16!("EfiBootServicesCode"),
+        MemoryType::BOOT_SERVICES_DATA => cstr16!("EfiBootServicesData"),
+        MemoryType::RUNTIME_SERVICES_CODE => cstr16!("EfiRuntimeServicesCode"),
+        MemoryType::RUNTIME_SERVICES_DATA => cstr16!("EfiRuntimeServicesData"),
+        MemoryType::CONVENTIONAL => cstr16!("EfiConventionalMemory"),
+        MemoryType::UNUSABLE => cstr16!("EfiUnusableMemory"),
+        MemoryType::ACPI_RECLAIM => cstr16!("EfiACPIReclaimMemory"),
+        MemoryType::ACPI_NON_VOLATILE => cstr16!("EfiAcpiMemoryNVS"),
+        MemoryType::MMIO => cstr16!("EfiMemoryMappedIO"),
+        MemoryType::MMIO_PORT_SPACE => cstr16!("EfiMemoryMappedIOPortSpace"),
+        MemoryType::PAL_CODE => cstr16!("EfiPalCode"),
+        MemoryType::PERSISTENT_MEMORY => cstr16!("EfiPersistentMemory"),
+        _ => cstr16!("InvalidMemoryType"),
+    }
+}
+
+fn open_root_dir(services: &BootServices, image_handle: Handle) -> uefi::Result<Directory> {
+    let loaded_image = match match unsafe {
+        services.open_protocol::<LoadedImage>(
+            OpenProtocolParams {
+                handle: image_handle,
+                agent: image_handle,
+                controller: None,
+            },
+            OpenProtocolAttributes::GetProtocol,
+        )?
+    }
+    .get_mut()
+    {
+        None => return Err(uefi::Error::new(Status::ABORTED, ())),
+        Some(proto) => proto,
+    }
+    .device()
+    {
+        None => return Err(uefi::Error::new(Status::ABORTED, ())),
+        Some(handle) => handle,
+    };
+
+    let binding = unsafe {
+        services.open_protocol::<SimpleFileSystem>(
+            OpenProtocolParams {
+                handle: loaded_image,
+                agent: image_handle,
+                controller: None,
+            },
+            OpenProtocolAttributes::GetProtocol,
+        )?
+    };
+    let fs = match binding.get_mut() {
+        None => return Err(uefi::Error::new(Status::ABORTED, ())),
+        Some(proto) => proto,
+    };
+
+    Ok(fs.open_volume()?)
+}
+
+#[entry]
+fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
+    uefi_services::init(&mut system_table).unwrap();
+
+    system_table
+        .stdout()
+        .output_string(cstr16!("Hello, World!\r\n"))
+        .unwrap();
+
+    let mut memmap_buf = [0u8; 4096 * 4];
+    let memmap = match get_memory_map(system_table.boot_services(), &mut memmap_buf) {
+        Err(e) => return e.status(),
+        Ok(map) => map,
+    };
+
+    let mut root_dir = match open_root_dir(system_table.boot_services(), image_handle) {
+        Err(e) => return e.status(),
+        Ok(dir) => dir,
+    };
+
+    let mut memmap_file = match root_dir.open(
+        cstr16!("\\memmap"),
+        FileMode::CreateReadWrite,
+        FileAttribute::empty(),
+    ) {
+        Err(e) => return e.status(),
+        Ok(file) => file.into_regular_file().unwrap(),
+    };
+
+    let _ = save_memory_map(&mut system_table, &memmap, &mut memmap_file);
+    memmap_file.close();
+
+    let _ = system_table.stdout().output_string(cstr16!("All done\r\n"));
+
     loop {}
 }
