@@ -1,0 +1,72 @@
+[config]
+skip_core_tasks = true
+
+[env]
+DEVENV_DIR = "../devenv"
+
+[tasks.default]
+dependencies = ["run"]
+
+[tasks.build-loader]
+script = '''
+#!/bin/bash
+
+cd mikan-loader
+cargo build --release
+'''
+
+[tasks.build-kernel]
+script = '''
+#!/bin/bash
+
+cd kernel
+cargo build --release
+'''
+
+[tasks.build]
+dependencies = ["build-loader", "build-kernel"]
+
+[tasks.run]
+command = "${DEVENV_DIR}/run_qemu.sh"
+args = [
+    "mikan-loader/target/x86_64-unknown-uefi/release/mikan-loader.efi",
+    "kernel/target/x86_64-unknown-none/release/kernel",
+]
+dependencies = ["build"]
+
+[tasks.clean]
+dependencies = ["clean-file"]
+
+[tasks.clean-cargo]
+dependencies = ["clean-loader", "clean-kernel"]
+
+[tasks.clean-loader]
+script = '''
+#!/bin/bash
+
+cd mikan-loader
+cargo clean
+'''
+
+[tasks.clean-kernel]
+script = '''
+#!/bin/bash
+
+cd kernel
+cargo clean
+'''
+
+[tasks.clean-file]
+script = ['''
+#!/bin/bash
+
+mountpoint -q mnt && sudo umount mnt
+
+if [ -f disk.img ]; then
+    rm disk.img
+fi
+
+if [ -d mnt ]; then
+    rmdir mnt
+fi
+''']

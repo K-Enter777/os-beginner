@@ -4,18 +4,26 @@
 mod chars;
 
 use crate::chars::*;
-use core::{fmt::Write, mem::size_of};
+use core::{
+    fmt::Write,
+    mem::{size_of, transmute},
+    slice,
+};
 use uefi::{
     prelude::*,
     proto::{
         loaded_image::LoadedImage,
         media::{
-            file::{Directory, File, FileAttribute, FileMode, RegularFile},
+            file::{Directory, File, FileAttribute, FileInfo, FileMode, RegularFile},
             fs::SimpleFileSystem,
         },
     },
-    table::boot::{
-        MemoryDescriptor, MemoryMap, MemoryType, OpenProtocolAttributes, OpenProtocolParams,
+    table::{
+        boot::{
+            AllocateType, MemoryDescriptor, MemoryMap, MemoryType, OpenProtocolAttributes,
+            OpenProtocolParams,
+        },
+        runtime::Time,
     },
     CStr16,
 };
@@ -182,7 +190,57 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     let _ = save_memory_map(&mut system_table, &memmap, &mut memmap_file);
     memmap_file.close();
 
-    let _ = system_table.stdout().output_string(cstr16!("All done\r\n"));
+    // `\kernel.elf` を開く
+    let mut kernel_file =
+        match root_dir.open(cstr16!("\\kernel"), FileMode::Read, FileAttribute::empty()) {
+            Err(e) => return e.status(),
+            Ok(file) => file,
+        };
+
+    // カーネルファイル情報を取得
+    const FILE_INFO_SIZE: usize = size_of::<u64>() * 2
+        + size_of::<Time>() * 3
+        + size_of::<FileAttribute>()
+        // （恐らく）ここまでがファイル名以外の情報のためのサイズ
+        // ここからはファイル名のための情報
+        // 文字スライスが null 終端されていない代わりに、長さの情報を持っている（と思われる）
+        + size_of::<usize>()
+        + size_of::<u16>() * "\\kernel".len();
+    // ファイル情報保持のためのバッファ
+    let mut file_info_buffer = [0u8; FILE_INFO_SIZE];
+    let file_info = match kernel_file.get_info::<FileInfo>(&mut file_info_buffer) {
+        Err(e) => return e.status(),
+        Ok(info) => info,
+    };
+
+    let kernel_file_size = file_info.file_size();
+
+    // ページの割り当て
+    let kernel_base_addr = 0x100000;
+    match system_table.boot_services().allocate_pages(
+        AllocateType::Address(kernel_base_addr),
+        MemoryType::LOADER_DATA,
+        ((kernel_file_size + 0xfff) / 0x1000) as usize, // ページサイズは 4 KiB
+    ) {
+        Err(e) => return e.status(),
+        Ok(_) => (),
+    };
+
+    // メモリにカーネルをロード
+    let mut buf = unsafe {
+        slice::from_raw_parts_mut(kernel_base_addr as *mut u8, kernel_file_size as usize)
+    };
+    let _ = kernel_file.into_regular_file().unwrap().read(&mut buf);
+
+    // UEFI のブートサービスを終了する
+    let _ = system_table.exit_boot_services(MemoryType(0));
+
+    // カーネルの呼び出し
+    // ELF ファイルの 24 byte 目から 64 bit でエントリーポイントの番地が書いてある
+    let entry_addr = unsafe { *((kernel_base_addr + 24) as *const u64) };
+
+    let entry_point: fn() = unsafe { transmute(kernel_base_addr + 0x0120) };
+    entry_point();
 
     loop {}
 }
