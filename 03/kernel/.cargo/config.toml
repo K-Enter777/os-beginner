@@ -1,0 +1,19 @@
+[build]
+target = "x86_64-unknown-none"
+
+rustflags = [
+    # Build Options
+    "-C",
+    "no-redzone=yes",
+    "-C",
+    "relocation-model=static",
+    # "-g",
+
+    # Linker Options
+    "-C",
+    "link-arg=--entry=kernel_entry",
+    "-C",
+    "link-arg=--image-base=0x100000",
+    "-C",
+    "link-arg=-static",
+]
