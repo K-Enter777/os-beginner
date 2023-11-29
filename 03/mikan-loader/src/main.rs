@@ -15,7 +15,7 @@ use uefi::{
     data_types::Identify,
     prelude::*,
     proto::{
-        console::gop::{self, GraphicsOutput, PixelFormat},
+        console::gop::{GraphicsOutput, PixelFormat},
         loaded_image::LoadedImage,
         media::{
             file::{Directory, File, FileAttribute, FileInfo, FileMode, RegularFile},
@@ -243,13 +243,6 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     // 画面情報の取得
     let graphics_info = get_gop_info(image_handle, &mut system_table).unwrap();
 
-    // 画面を白で塗りつぶす
-    unsafe {
-        for i in 0..graphics_info.frame_buffer_size {
-            *(graphics_info.frame_buffer_base as *mut u8) = u8::MAX;
-        }
-    }
-
     // 画面情報の表示
     let mut buf16 = [0u16; 128];
     let mut str16_buf = Str16Buf::new(&mut buf16);
@@ -308,16 +301,31 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         slice::from_raw_parts_mut(kernel_base_addr as *mut u8, kernel_file_size as usize)
     };
     let _ = kernel_file.into_regular_file().unwrap().read(&mut buf);
+    str16_buf.clear();
+    write!(
+        str16_buf,
+        "Kernel: 0x{:0x} ({} bytes)\r\n",
+        kernel_base_addr, kernel_file_size
+    )
+    .unwrap();
+    system_table
+        .stdout()
+        .output_string(str16_buf.into_cstr16())
+        .unwrap();
 
     // UEFI のブートサービスを終了する
     let _ = system_table.exit_boot_services(MemoryType(0));
 
     // カーネルの呼び出し
     // ELF ファイルの 24 byte 目から 64 bit でエントリーポイントの番地が書いてある
-    let entry_addr = unsafe { *((kernel_base_addr + 24) as *const u64) };
+    let _entry_addr = unsafe { *((kernel_base_addr + 24) as *const u64) };
 
-    let entry_point: fn() = unsafe { transmute(kernel_base_addr + 0x0120) };
-    entry_point();
+    let entry_point: extern "sysv64" fn(usize, usize) =
+        unsafe { transmute(kernel_base_addr + 0x0120) };
+    entry_point(
+        graphics_info.frame_buffer_base,
+        graphics_info.frame_buffer_size,
+    );
 
     loop {}
 }
