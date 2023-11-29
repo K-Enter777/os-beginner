@@ -6,11 +6,13 @@ mod graphics;
 
 use crate::chars::*;
 use core::{
+    arch::asm,
     fmt::Write,
     mem::{size_of, transmute},
     slice,
 };
 use graphics::GraphicsInfo;
+use log::error;
 use uefi::{
     data_types::Identify,
     prelude::*,
@@ -206,23 +208,45 @@ fn get_pixel_format_unicode(fmt: PixelFormat) -> &'static CStr16 {
 #[entry]
 fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     // 恐らく log を使えるようにしているのではないか
-    uefi_services::init(&mut system_table).unwrap();
+    match uefi_services::init(&mut system_table) {
+        Err(_) => {
+            system_table
+                .stderr()
+                .output_string(cstr16!("Failed to initialize\r\n"))
+                // 流石にこれの失敗はもう無視するしかない
+                .unwrap_or_default();
+            halt()
+        }
+        Ok(_) => (),
+    }
 
-    system_table
+    match system_table
         .stdout()
         .output_string(cstr16!("Hello, World!\r\n"))
-        .unwrap();
+    {
+        Err(e) => {
+            error!("Failed to print: {}", e);
+            halt();
+        }
+        Ok(_) => (),
+    }
 
     // メモリマップの取得
     let mut memmap_buf = [0u8; 4096 * 4];
     let memmap = match get_memory_map(system_table.boot_services(), &mut memmap_buf) {
-        Err(e) => return e.status(),
+        Err(e) => {
+            error!("Failed to get memmap: {}", e);
+            halt();
+        }
         Ok(map) => map,
     };
 
     // ルートディレクトリ操作用のオブジェクトの取得
     let mut root_dir = match open_root_dir(system_table.boot_services(), image_handle) {
-        Err(e) => return e.status(),
+        Err(e) => {
+            error!("Failed to open root dir: {}", e);
+            halt();
+        }
         Ok(dir) => dir,
     };
 
@@ -232,8 +256,18 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         FileMode::CreateReadWrite,
         FileAttribute::empty(),
     ) {
-        Err(e) => return e.status(),
-        Ok(file) => file.into_regular_file().unwrap(),
+        Err(e) => {
+            error!("Failed to open a file: {}", e);
+            halt();
+        }
+        Ok(file) => match file.into_regular_file() {
+            None => {
+                // これは流石に起こらないと思うが、一応
+                error!("Opend file isn't a regular file");
+                halt();
+            }
+            Some(file) => file,
+        },
     };
 
     // メモリマップを上で取得したファイルに保存する
@@ -241,29 +275,46 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     memmap_file.close();
 
     // 画面情報の取得
-    let graphics_info = get_gop_info(image_handle, &mut system_table).unwrap();
+    let graphics_info = match get_gop_info(image_handle, &mut system_table) {
+        Err(e) => {
+            error!("Failed to get gop info: {}", e);
+            halt();
+        }
+        Ok(info) => info,
+    };
 
     // 画面情報の表示
     let mut buf16 = [0u16; 128];
     let mut str16_buf = Str16Buf::new(&mut buf16);
-    write!(
+    match write!(
         str16_buf,
         "Resolution: {}x{}, Pixel Format: {}, {} pixels/line\r\n",
         graphics_info.pixel_info.resolution().0,
         graphics_info.pixel_info.resolution().1,
         get_pixel_format_unicode(graphics_info.pixel_info.pixel_format()),
         graphics_info.pixel_info.stride()
-    )
-    .unwrap();
-    system_table
-        .stdout()
-        .output_string(str16_buf.into_cstr16())
-        .unwrap();
+    ) {
+        Err(e) => {
+            error!("Failed to write on the buffer: {}", e);
+            halt()
+        }
+        Ok(_) => (),
+    };
+    match system_table.stdout().output_string(str16_buf.into_cstr16()) {
+        Err(e) => {
+            error!("Failed to print: {}", e);
+            halt();
+        }
+        Ok(_) => (),
+    };
 
     // `\kernel.elf` を開く
     let mut kernel_file =
         match root_dir.open(cstr16!("\\kernel"), FileMode::Read, FileAttribute::empty()) {
-            Err(e) => return e.status(),
+            Err(e) => {
+                error!("Failed to open kernel: {}", e);
+                halt();
+            }
             Ok(file) => file,
         };
 
@@ -279,7 +330,10 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     // ファイル情報保持のためのバッファ
     let mut file_info_buffer = [0u8; FILE_INFO_SIZE];
     let file_info = match kernel_file.get_info::<FileInfo>(&mut file_info_buffer) {
-        Err(e) => return e.status(),
+        Err(e) => {
+            error!("Failed to get kernel info: {}", e);
+            halt();
+        }
         Ok(info) => info,
     };
 
@@ -292,7 +346,10 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         MemoryType::LOADER_DATA,
         ((kernel_file_size + 0xfff) / 0x1000) as usize, // ページサイズは 4 KiB
     ) {
-        Err(e) => return e.status(),
+        Err(e) => {
+            error!("Failed to allocate pages: {}", e);
+            halt();
+        }
         Ok(_) => (),
     };
 
@@ -300,18 +357,40 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     let mut buf = unsafe {
         slice::from_raw_parts_mut(kernel_base_addr as *mut u8, kernel_file_size as usize)
     };
-    let _ = kernel_file.into_regular_file().unwrap().read(&mut buf);
+    match kernel_file.into_regular_file() {
+        None => {
+            error!("kernel isn't a regular file");
+            halt();
+        }
+        Some(mut file) => match file.read(&mut buf) {
+            Err(e) => {
+                error!("Failed to load the kernel: {}", e);
+                halt();
+            }
+            Ok(_) => (),
+        },
+    }
+
+    // 読み込んだ位置、バイト数を表示
     str16_buf.clear();
-    write!(
+    match write!(
         str16_buf,
         "Kernel: 0x{:0x} ({} bytes)\r\n",
         kernel_base_addr, kernel_file_size
-    )
-    .unwrap();
-    system_table
-        .stdout()
-        .output_string(str16_buf.into_cstr16())
-        .unwrap();
+    ) {
+        Err(e) => {
+            error!("Failed to write on the buffer: {}", e);
+            halt();
+        }
+        Ok(_) => (),
+    };
+    match system_table.stdout().output_string(str16_buf.into_cstr16()) {
+        Err(e) => {
+            error!("Failed to print: {}", e);
+            halt();
+        }
+        Ok(_) => (),
+    };
 
     // UEFI のブートサービスを終了する
     let _ = system_table.exit_boot_services(MemoryType(0));
@@ -328,4 +407,12 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     );
 
     loop {}
+}
+
+fn halt() -> ! {
+    unsafe {
+        loop {
+            asm!("hlt");
+        }
+    }
 }
