@@ -14,6 +14,16 @@ impl<'a> Str16Buf<'a> {
         Self { buf, pos: 0 }
     }
 
+    /// バッファをクリアし、再度使えるようにする。
+    #[allow(unused)]
+    pub fn clear(&mut self) {
+        if self.buf.len() == 0 {
+            return;
+        }
+        self.buf[0] = 0;
+        self.pos = 0;
+    }
+
     /// 所持しているバッファから UEFI 用の 16 bit 文字列を返す。
     pub fn into_cstr16(&self) -> &CStr16 {
         match CStr16::from_u16_with_nul(&self.buf[..=self.pos]) {

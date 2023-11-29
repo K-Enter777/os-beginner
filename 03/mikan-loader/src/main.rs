@@ -2,6 +2,7 @@
 #![no_main]
 
 mod chars;
+mod graphics;
 
 use crate::chars::*;
 use core::{
@@ -9,9 +10,12 @@ use core::{
     mem::{size_of, transmute},
     slice,
 };
+use graphics::GraphicsInfo;
 use uefi::{
+    data_types::Identify,
     prelude::*,
     proto::{
+        console::gop::{self, GraphicsOutput, PixelFormat},
         loaded_image::LoadedImage,
         media::{
             file::{Directory, File, FileAttribute, FileInfo, FileMode, RegularFile},
@@ -21,7 +25,7 @@ use uefi::{
     table::{
         boot::{
             AllocateType, MemoryDescriptor, MemoryMap, MemoryType, OpenProtocolAttributes,
-            OpenProtocolParams,
+            OpenProtocolParams, SearchType,
         },
         runtime::Time,
     },
@@ -153,6 +157,52 @@ fn open_root_dir(services: &BootServices, image_handle: Handle) -> uefi::Result<
     Ok(fs.open_volume()?)
 }
 
+/// 画面出力情報を取得する。
+fn get_gop_info(
+    image_handle: Handle,
+    system_table: &mut SystemTable<Boot>,
+) -> uefi::Result<GraphicsInfo> {
+    // GOP を操作するためのオブジェクト
+    let gop_handles = system_table
+        .boot_services()
+        .locate_handle_buffer(SearchType::ByProtocol(&GraphicsOutput::GUID))?;
+
+    // GOP を取得
+    let mut gop = unsafe {
+        system_table
+            .boot_services()
+            .open_protocol::<GraphicsOutput>(
+                OpenProtocolParams {
+                    handle: (*gop_handles)[0],
+                    agent: image_handle,
+                    controller: None,
+                },
+                OpenProtocolAttributes::GetProtocol,
+            )?
+    };
+
+    let pixel_info = match gop.get() {
+        None => return Err(uefi::Error::new(Status::ABORTED, ())),
+        Some(gop) => *gop.query_mode(0, system_table.boot_services())?.info(),
+    };
+
+    Ok(GraphicsInfo {
+        pixel_info,
+        frame_buffer_base: gop.frame_buffer().as_mut_ptr() as usize,
+        frame_buffer_size: gop.frame_buffer().size(),
+    })
+}
+
+/// ピクセルのデータ形式情報を文字列にする。
+fn get_pixel_format_unicode(fmt: PixelFormat) -> &'static CStr16 {
+    match fmt {
+        PixelFormat::Rgb => cstr16!("PixelRedGreenBlueReserved8bitPerColor"),
+        PixelFormat::Bgr => cstr16!("PixelBlueGreenRedReserved8BitPerColor"),
+        PixelFormat::Bitmask => cstr16!("PixelBitMask"),
+        PixelFormat::BltOnly => cstr16!("PixelBltOnly"),
+    }
+}
+
 #[entry]
 fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     // 恐らく log を使えるようにしているのではないか
@@ -189,6 +239,33 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     // メモリマップを上で取得したファイルに保存する
     let _ = save_memory_map(&mut system_table, &memmap, &mut memmap_file);
     memmap_file.close();
+
+    // 画面情報の取得
+    let graphics_info = get_gop_info(image_handle, &mut system_table).unwrap();
+
+    // 画面を白で塗りつぶす
+    unsafe {
+        for i in 0..graphics_info.frame_buffer_size {
+            *(graphics_info.frame_buffer_base as *mut u8) = u8::MAX;
+        }
+    }
+
+    // 画面情報の表示
+    let mut buf16 = [0u16; 128];
+    let mut str16_buf = Str16Buf::new(&mut buf16);
+    write!(
+        str16_buf,
+        "Resolution: {}x{}, Pixel Format: {}, {} pixels/line\r\n",
+        graphics_info.pixel_info.resolution().0,
+        graphics_info.pixel_info.resolution().1,
+        get_pixel_format_unicode(graphics_info.pixel_info.pixel_format()),
+        graphics_info.pixel_info.stride()
+    )
+    .unwrap();
+    system_table
+        .stdout()
+        .output_string(str16_buf.into_cstr16())
+        .unwrap();
 
     // `\kernel.elf` を開く
     let mut kernel_file =
