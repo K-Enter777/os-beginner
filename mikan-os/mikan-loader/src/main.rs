@@ -188,11 +188,6 @@ fn get_gop_info(
         None => return Err(uefi::Error::new(Status::ABORTED, ())),
         Some(gop) => gop.current_mode_info(),
     };
-    error!(
-        "Resolution: {}x{}",
-        pixel_info.resolution().0,
-        pixel_info.resolution().1
-    );
 
     Ok(GraphicsInfo {
         pixel_info,
@@ -397,10 +392,9 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         }
         Ok(_) => (),
     };
-    error!("fb_base: 0x{:x}", graphics_info.frame_buffer_base);
 
     // UEFI のブートサービスを終了する
-    let _ = system_table.exit_boot_services(MemoryType(0));
+    // let _ = system_table.exit_boot_services(MemoryType(0));
 
     // カーネルの呼び出し
     // ELF ファイルの 24 byte 目から 64 bit でエントリーポイントの番地が書いてある
@@ -429,10 +423,10 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     };
 
     let entry_point: extern "sysv64" fn(FrameBufferConfig) =
-        unsafe { transmute(kernel_base_addr + 0x0120) };
+        unsafe { transmute(kernel_base_addr + 0x0190) };
     entry_point(config);
 
-    loop {}
+    halt()
 }
 
 fn halt() -> ! {

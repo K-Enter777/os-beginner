@@ -2,77 +2,63 @@
 #![no_main]
 
 mod graphics;
+mod placement;
 
-use core::{arch::asm, panic::PanicInfo, slice};
-use graphics::{FrameBufferConfig, PixelFormat};
-
-struct PixelColor {
-    red: u8,
-    green: u8,
-    blue: u8,
-}
-
-fn write_pixel(config: &FrameBufferConfig, x: usize, y: usize, color: &PixelColor) {
-    let pixel = unsafe {
-        slice::from_raw_parts_mut(
-            (4 * (config.pixels_per_scan_line * y + x) + config.frame_buffer) as *mut u8,
-            3,
-        )
-    };
-    match config.pixel_format {
-        PixelFormat::Rgb => {
-            pixel[0] = color.red;
-            pixel[1] = color.green;
-            pixel[2] = color.blue;
-        }
-        PixelFormat::Bgr => {
-            pixel[0] = color.blue;
-            pixel[1] = color.green;
-            pixel[2] = color.red;
-        }
-    }
-}
+use core::{arch::asm, mem::size_of, panic::PanicInfo};
+use graphics::{
+    BgrResv8BitPerColorPixelWriter, FrameBufferConfig, PixelColor, PixelFormat, PixelWrite,
+    RgbResv8BitPerColorPixelWriter,
+};
+use placement::new_mut_with_buf;
 
 #[no_mangle]
 pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
-    for x in 0..frame_buffer_config.horizontal_resolution {
-        for y in 0..frame_buffer_config.vertical_resolution {
-            write_pixel(
-                &frame_buffer_config,
-                x,
-                y,
-                &PixelColor {
-                    red: u8::MAX,
-                    green: u8::MAX,
-                    blue: u8::MAX,
-                },
-            );
+    let pixel_writer_buf = [0u8; size_of::<RgbResv8BitPerColorPixelWriter>()];
+    let pixel_writer: &mut dyn PixelWrite = match frame_buffer_config.pixel_format {
+        PixelFormat::Rgb => {
+            match new_mut_with_buf(
+                RgbResv8BitPerColorPixelWriter::new(frame_buffer_config),
+                &pixel_writer_buf,
+            ) {
+                Err(_size) => halt(),
+                Ok(writer) => writer,
+            }
+        }
+        PixelFormat::Bgr => {
+            match new_mut_with_buf(
+                BgrResv8BitPerColorPixelWriter::new(frame_buffer_config),
+                &pixel_writer_buf,
+            ) {
+                Err(_size) => halt(),
+                Ok(writer) => writer,
+            }
+        }
+    };
+
+    for x in 0..pixel_writer.config().horizontal_resolution {
+        for y in 0..pixel_writer.config().vertical_resolution {
+            pixel_writer.write(x, y, &PixelColor::new(u8::MAX, u8::MAX, u8::MAX));
         }
     }
 
     for x in 0..200 {
         for y in 0..100 {
-            write_pixel(
-                &frame_buffer_config,
-                100 + x,
-                100 + y,
-                &PixelColor {
-                    red: 0,
-                    green: u8::MAX,
-                    blue: 0,
-                },
-            );
+            pixel_writer.write(100 + x, 100 + y, &PixelColor::new(0, 255, 0));
         }
     }
 
+    halt();
+}
+
+#[panic_handler]
+fn panic(_: &PanicInfo) -> ! {
+    halt()
+}
+
+fn halt() -> ! {
     loop {
         unsafe {
             asm!("hlt");
         }
     }
-}
-
-#[panic_handler]
-fn panic(_: &PanicInfo) -> ! {
-    loop {}
 }
