@@ -2,15 +2,19 @@
 #![no_main]
 
 mod chars;
+mod elf;
 mod graphics;
 
 use crate::chars::*;
+use crate::elf::Elf64Ehdr;
 use core::{
     arch::asm,
     fmt::Write,
     mem::{size_of, transmute},
+    ptr::{copy_nonoverlapping, write_bytes},
     slice,
 };
+use elf::{Elf64Phdr, ProgramType};
 use graphics::FrameBufferConfig;
 use graphics::GraphicsInfo;
 use log::error;
@@ -206,6 +210,48 @@ fn get_pixel_format_unicode(fmt: PixelFormat) -> &'static CStr16 {
     }
 }
 
+/// ELF ファイルを展開するときの、最下位アドレスと最上位アドレスを返す。
+/// 戻り値は (最下位, 最上位)。
+fn calc_load_address_range(phdrs: &[Elf64Phdr]) -> (usize, usize) {
+    let mut first = usize::MAX;
+    let mut last = usize::MIN;
+    for phdr in phdrs {
+        if phdr.r#type != ProgramType::Load as u32 {
+            continue;
+        }
+        first = usize::min(first, phdr.vaddr);
+        last = usize::max(last, phdr.vaddr + phdr.memsz as usize);
+    }
+    (first, last)
+}
+
+/// メモリに展開された ELF ファイルのヘッダ情報を元に、指定されたアドレスへ命令等を配置する。
+/// ただし、この関数を呼ぶ前に必要領域のページ割り当てを行っておくこと。
+fn copy_load_segments(src_base: usize, phdrs: &[Elf64Phdr]) {
+    for phdr in phdrs {
+        if phdr.r#type != ProgramType::Load as u32 {
+            continue;
+        }
+
+        // 指定アドレスへのコピー
+        let segm_in_file = src_base + phdr.offset as usize;
+        unsafe {
+            copy_nonoverlapping(
+                segm_in_file as *const u8,
+                phdr.vaddr as *mut u8,
+                phdr.filesz as usize,
+            );
+        }
+
+        // 残りの部分の 0 埋め
+        let remein_base = (phdr.vaddr + phdr.filesz as usize) as *mut u8;
+        let remain_bytes = (phdr.memsz - phdr.filesz) as usize;
+        unsafe {
+            write_bytes(remein_base, 0, remain_bytes);
+        }
+    }
+}
+
 #[entry]
 fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     // 恐らく log を使えるようにしているのではないか
@@ -340,12 +386,54 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
 
     let kernel_file_size = file_info.file_size();
 
+    // ファイル全体を扱うオブジェクトから、レギュラーファイル用オブジェクトに変換
+    let mut kernel_file = match kernel_file.into_regular_file() {
+        None => {
+            error!("kernel isn't a regular file");
+            halt();
+        }
+        Some(file) => file,
+    };
+
+    // カーネル一時展開用のプールを取得
+    let kernel_buffer_addr = match system_table
+        .boot_services()
+        .allocate_pool(MemoryType::LOADER_DATA, kernel_file_size as usize)
+    {
+        Err(e) => {
+            error!("Failed to allocate pool: {}", e);
+            halt();
+        }
+        Ok(buf) => buf,
+    };
+    let kernel_buffer =
+        unsafe { slice::from_raw_parts_mut(kernel_buffer_addr, kernel_file_size as usize) };
+
+    // カーネルを一時的に展開
+    match kernel_file.read(kernel_buffer) {
+        Err(e) => {
+            error!("can't read kernel in pool: {}", e);
+            halt();
+        }
+        Ok(_) => (),
+    }
+
+    // kernel.elf の ELF ヘッダを取得
+    let kernel_ehdr = unsafe { *(kernel_buffer_addr as *const Elf64Ehdr) };
+    let phdr_addr = kernel_buffer_addr as usize + kernel_ehdr.phoff as usize;
+    let kernel_phdrs =
+        unsafe { slice::from_raw_parts(phdr_addr as *const Elf64Phdr, kernel_ehdr.phnum as usize) };
+
+    // カーネルを展開する最下位・最上位ビットを得る
+    let (kernel_first_addr, kernel_last_addr) = calc_load_address_range(&kernel_phdrs);
+
     // ページの割り当て
-    let kernel_base_addr = 0x100000;
+    // ページサイズは 4 KiB
+    let num_pages = ((kernel_last_addr - kernel_first_addr + 0xfff) / 0x1000) as usize;
     match system_table.boot_services().allocate_pages(
-        AllocateType::Address(kernel_base_addr),
+        AllocateType::Address(kernel_first_addr as u64),
         MemoryType::LOADER_DATA,
-        ((kernel_file_size + 0xfff) / 0x1000) as usize, // ページサイズは 4 KiB
+        num_pages,
     ) {
         Err(e) => {
             error!("Failed to allocate pages: {}", e);
@@ -354,30 +442,15 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         Ok(_) => (),
     };
 
-    // メモリにカーネルをロード
-    let mut buf = unsafe {
-        slice::from_raw_parts_mut(kernel_base_addr as *mut u8, kernel_file_size as usize)
-    };
-    match kernel_file.into_regular_file() {
-        None => {
-            error!("kernel isn't a regular file");
-            halt();
-        }
-        Some(mut file) => match file.read(&mut buf) {
-            Err(e) => {
-                error!("Failed to load the kernel: {}", e);
-                halt();
-            }
-            Ok(_) => (),
-        },
-    }
+    // カーネルのロード
+    copy_load_segments(kernel_buffer_addr as usize, &kernel_phdrs);
 
-    // 読み込んだ位置、バイト数を表示
+    // カーネルを読み込んだ位置を表示
     str16_buf.clear();
     match write!(
         str16_buf,
-        "Kernel: 0x{:0x} ({} bytes)\r\n",
-        kernel_base_addr, kernel_file_size
+        "Kernel: 0x{:0x} - 0x{:0x}\r\n",
+        kernel_first_addr, kernel_last_addr
     ) {
         Err(e) => {
             error!("Failed to write on the buffer: {}", e);
@@ -393,12 +466,22 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         Ok(_) => (),
     };
 
-    // UEFI のブートサービスを終了する
-    // let _ = system_table.exit_boot_services(MemoryType(0));
+    // 確保してあったカーネル一次保存用のプールを解放
+    unsafe {
+        match system_table
+            .boot_services()
+            .free_pool(kernel_buffer.as_ptr() as *mut u8)
+        {
+            Err(e) => {
+                error!("Failed to free pool: {}", e);
+                halt();
+            }
+            Ok(_) => (),
+        }
+    }
 
-    // カーネルの呼び出し
-    // ELF ファイルの 24 byte 目から 64 bit でエントリーポイントの番地が書いてある
-    let _entry_addr = unsafe { *((kernel_base_addr + 24) as *const u64) };
+    // UEFI のブートサービスを終了する
+    let _ = system_table.exit_boot_services(MemoryType(0));
 
     let frame_buffer = graphics_info.frame_buffer_base;
     let pixels_per_scan_line = graphics_info.pixel_info.stride();
@@ -422,8 +505,10 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         pixel_format,
     };
 
+    // カーネルの呼び出し
+    // ELF ファイルの 24 byte 目から 64 bit でエントリーポイントの番地が書いてある
     let entry_point: extern "sysv64" fn(FrameBufferConfig) =
-        unsafe { transmute(kernel_base_addr + 0x0190) };
+        unsafe { transmute(kernel_ehdr.entry) };
     entry_point(config);
 
     halt()
