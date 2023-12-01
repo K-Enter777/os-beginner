@@ -1,0 +1,22 @@
+[package]
+name = "mikan-loader"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "mikan-loader"
+test = false
+bench = false
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+log = "0.4.20"
+uefi = "0.26"
+uefi-services = "0.23.0"
