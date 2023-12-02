@@ -70,3 +70,23 @@ if [ -d mnt ]; then
     rmdir mnt
 fi
 ''']
+
+[tasks.debug]
+dependencies = ["debug-build-loader", "debug-build-kernel"]
+command = "${DEVENV_DIR}/run_qemu_debug.sh"
+args = [
+    "mikan-loader/target/x86_64-unknown-uefi/debug/mikan-loader.efi",
+    "kernel/target/x86_64-unknown-none/debug/kernel",
+]
+
+[tasks.debug-build-loader]
+script = '''
+cd mikan-loader
+cargo build
+'''
+
+[tasks.debug-build-kernel]
+script = '''
+cd kernel
+cargo build
+'''
