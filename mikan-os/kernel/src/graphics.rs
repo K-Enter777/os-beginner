@@ -31,7 +31,7 @@ impl PixelColor {
     }
 }
 
-pub(crate) trait PixelWrite {
+pub(crate) trait PixelWriter {
     fn write(&self, x: usize, y: usize, color: &PixelColor);
     fn config(&self) -> &FrameBufferConfig;
 
@@ -57,7 +57,7 @@ impl RgbResv8BitPerColorPixelWriter {
     }
 }
 
-impl PixelWrite for RgbResv8BitPerColorPixelWriter {
+impl PixelWriter for RgbResv8BitPerColorPixelWriter {
     fn write(&self, x: usize, y: usize, color: &PixelColor) {
         let pixel = self.pixel(x, y);
         pixel[0] = color.r;
@@ -80,7 +80,7 @@ impl BgrResv8BitPerColorPixelWriter {
     }
 }
 
-impl PixelWrite for BgrResv8BitPerColorPixelWriter {
+impl PixelWriter for BgrResv8BitPerColorPixelWriter {
     fn write(&self, x: usize, y: usize, color: &PixelColor) {
         let pixel = self.pixel(x, y);
         pixel[0] = color.b;

@@ -470,7 +470,7 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     unsafe {
         match system_table
             .boot_services()
-            .free_pool(kernel_buffer.as_ptr() as *mut u8)
+            .free_pool(kernel_buffer.as_mut_ptr() as *mut u8)
         {
             Err(e) => {
                 error!("Failed to free pool: {}", e);
