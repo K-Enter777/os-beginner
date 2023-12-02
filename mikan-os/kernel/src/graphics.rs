@@ -2,6 +2,8 @@
 
 use core::slice;
 
+use crate::k_font_a;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub enum PixelFormat {
@@ -34,6 +36,19 @@ impl PixelColor {
 pub(crate) trait PixelWriter {
     fn write(&self, x: usize, y: usize, color: &PixelColor);
     fn config(&self) -> &FrameBufferConfig;
+
+    fn write_ascii(&self, x: usize, y: usize, c: u8, color: &PixelColor) {
+        if c != b'A' {
+            return;
+        }
+        for dy in 0..16 {
+            for dx in 0..8 {
+                if ((k_font_a[dy] << dx) & 0x80) != 0 {
+                    self.write(x + dx, y + dy, color);
+                }
+            }
+        }
+    }
 
     #[inline]
     fn pixel(&self, x: usize, y: usize) -> &mut [u8] {

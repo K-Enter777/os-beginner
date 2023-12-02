@@ -11,6 +11,25 @@ use graphics::{
 };
 use placement::new_mut_with_buf;
 
+const k_font_a: [u8; 16] = [
+    0b00000000, //
+    0b00011000, //    **
+    0b00011000, //    **
+    0b00011000, //    **
+    0b00011000, //    **
+    0b00100100, //   *  *
+    0b00100100, //   *  *
+    0b00100100, //   *  *
+    0b00100100, //   *  *
+    0b01111110, //  ******
+    0b01000010, //  *    *
+    0b01000010, //  *    *
+    0b01000010, //  *    *
+    0b11100111, // ***  ***
+    0b00000000, //
+    0b00000000, //
+];
+
 #[no_mangle]
 pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
     let mut pixel_writer_buf = [0u8; size_of::<RgbResv8BitPerColorPixelWriter>()];
@@ -35,17 +54,23 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
         }
     };
 
+    // 背景を白で塗りつぶす
     for x in 0..pixel_writer.config().horizontal_resolution {
         for y in 0..pixel_writer.config().vertical_resolution {
             pixel_writer.write(x, y, &PixelColor::new(u8::MAX, u8::MAX, u8::MAX));
         }
     }
 
+    // 緑の長方形の描画
     for x in 0..200 {
         for y in 0..100 {
-            pixel_writer.write(100 + x, 100 + y, &PixelColor::new(0, 255, 0));
+            pixel_writer.write(x, y, &PixelColor::new(0, 255, 0));
         }
     }
+
+    // 文字の描画
+    pixel_writer.write_ascii(50, 50, b'A', &PixelColor::new(0, 0, 0));
+    pixel_writer.write_ascii(58, 50, b'A', &PixelColor::new(0, 0, 0));
 
     halt();
 }
