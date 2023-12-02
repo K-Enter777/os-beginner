@@ -3,6 +3,8 @@
 		"01/rust/Cargo.toml",
 		"02/mikan-os/Cargo.toml",
 		"03/mikan-loader/Cargo.toml",
-		"03/kernel/Cargo.toml"
+		"03/kernel/Cargo.toml",
+		"mikan-os/mikan-loader/Cargo.toml",
+		"mikan-os/kernel/Cargo.toml",
 	],
 }
