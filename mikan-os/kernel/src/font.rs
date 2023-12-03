@@ -1,33 +1,27 @@
-use crate::graphics::{PixelColor, PixelWriter};
-
-const K_FONT_A: [u8; 16] = [
-    0b00000000, //
-    0b00011000, //    **
-    0b00011000, //    **
-    0b00011000, //    **
-    0b00011000, //    **
-    0b00100100, //   *  *
-    0b00100100, //   *  *
-    0b00100100, //   *  *
-    0b00100100, //   *  *
-    0b01111110, //  ******
-    0b01000010, //  *    *
-    0b01000010, //  *    *
-    0b01000010, //  *    *
-    0b11100111, // ***  ***
-    0b00000000, //
-    0b00000000, //
-];
+use crate::{
+    font_data::get_font,
+    graphics::{PixelColor, PixelWriter},
+};
 
 pub(crate) fn write_ascii(writer: &dyn PixelWriter, x: usize, y: usize, c: u8, color: &PixelColor) {
-    if c != b'A' {
-        return;
-    }
+    let font = get_font(c);
     for dy in 0..16 {
         for dx in 0..8 {
-            if ((K_FONT_A[dy] << dx) & 0x80) != 0 {
+            if ((font[dy] << dx) & 0x80) != 0 {
                 writer.write(x + dx, y + dy, color);
             }
         }
+    }
+}
+
+pub(crate) fn write_string(
+    writer: &dyn PixelWriter,
+    x: usize,
+    y: usize,
+    s: &[u8],
+    color: &PixelColor,
+) {
+    for i in 0..s.len() {
+        write_ascii(writer, x + 8 * i, y, s[i], color);
     }
 }

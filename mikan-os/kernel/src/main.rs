@@ -8,13 +8,14 @@ mod graphics;
 mod placement;
 mod string;
 
-use core::{arch::asm, mem::size_of, panic::PanicInfo};
-use font::write_ascii;
+use core::{arch::asm, fmt::Write, mem::size_of, panic::PanicInfo};
+use font::{write_ascii, write_string};
 use frame_buffer_config::{FrameBufferConfig, PixelFormat};
 use graphics::{
     BgrResv8BitPerColorPixelWriter, PixelColor, PixelWriter, RgbResv8BitPerColorPixelWriter,
 };
 use placement::new_mut_with_buf;
+use string::StringU8;
 
 #[no_mangle]
 pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
@@ -60,6 +61,35 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
         write_ascii(pixel_writer, 8 * i, 50, c, &PixelColor::new(0, 0, 0));
         i += 1;
     }
+
+    // ハローワールド
+    write_string(
+        pixel_writer,
+        0,
+        66,
+        b"Hello, world!",
+        &PixelColor::new(0, 0, 255),
+    );
+
+    // ~~sprintf ~~ write! チェック
+    let mut buf = [0u8; 128];
+    let mut str_buf = StringU8::new(&mut buf);
+    if let Err(_) = write!(str_buf, "計算: 1 + 2 = {}", 1 + 2) {
+        write_string(
+            pixel_writer,
+            0,
+            82,
+            b"Characters must be ASCII!",
+            &PixelColor::new(255, 0, 0),
+        )
+    }
+    write_string(
+        pixel_writer,
+        0,
+        82,
+        str_buf.to_string(),
+        &PixelColor::new(0, 0, 0),
+    );
 }
 
 #[panic_handler]
