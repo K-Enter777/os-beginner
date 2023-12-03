@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+mod console;
 mod font;
 mod font_data;
 mod frame_buffer_config;
@@ -8,8 +9,8 @@ mod graphics;
 mod placement;
 mod string;
 
+use console::Console;
 use core::{arch::asm, fmt::Write, mem::size_of, panic::PanicInfo};
-use font::{write_ascii, write_string};
 use frame_buffer_config::{FrameBufferConfig, PixelFormat};
 use graphics::{
     BgrResv8BitPerColorPixelWriter, PixelColor, PixelWriter, RgbResv8BitPerColorPixelWriter,
@@ -48,48 +49,23 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
         }
     }
 
-    // 緑の長方形の描画
-    for x in 0..200 {
-        for y in 0..100 {
-            pixel_writer.write(x, y, &PixelColor::new(0, 255, 0));
-        }
-    }
-
-    // 文字一覧を描画
-    let mut i = 0;
-    for c in b'!'..=b'~' {
-        write_ascii(pixel_writer, 8 * i, 50, c, &PixelColor::new(0, 0, 0));
-        i += 1;
-    }
-
-    // ハローワールド
-    write_string(
+    let mut console = Console::new(
         pixel_writer,
-        0,
-        66,
-        b"Hello, world!",
-        &PixelColor::new(0, 0, 255),
+        PixelColor::new(0, 0, 0),
+        PixelColor::new(255, 255, 255),
     );
 
-    // ~~sprintf ~~ write! チェック
     let mut buf = [0u8; 128];
     let mut str_buf = StringU8::new(&mut buf);
-    if let Err(_) = write!(str_buf, "計算: 1 + 2 = {}", 1 + 2) {
-        write_string(
-            pixel_writer,
-            0,
-            82,
-            b"Characters must be ASCII!",
-            &PixelColor::new(255, 0, 0),
-        )
+    // write!(str_buf, "line {}\n", 0).unwrap();
+    // console.put_string(str_buf.to_string());
+    for i in 0..27 {
+        str_buf.clear();
+        write!(str_buf, "line {}\n", i).unwrap();
+        console.put_string(str_buf.to_string());
     }
-    write_string(
-        pixel_writer,
-        0,
-        82,
-        str_buf.to_string(),
-        &PixelColor::new(0, 0, 0),
-    );
+
+    halt();
 }
 
 #[panic_handler]
