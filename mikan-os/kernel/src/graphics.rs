@@ -2,24 +2,7 @@
 
 use core::slice;
 
-use crate::k_font_a;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub enum PixelFormat {
-    Rgb,
-    Bgr,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct FrameBufferConfig {
-    pub frame_buffer: usize,
-    pub pixels_per_scan_line: usize,
-    pub horizontal_resolution: usize,
-    pub vertical_resolution: usize,
-    pub pixel_format: PixelFormat,
-}
+use crate::frame_buffer_config::FrameBufferConfig;
 
 pub struct PixelColor {
     r: u8,
@@ -36,19 +19,6 @@ impl PixelColor {
 pub(crate) trait PixelWriter {
     fn write(&self, x: usize, y: usize, color: &PixelColor);
     fn config(&self) -> &FrameBufferConfig;
-
-    fn write_ascii(&self, x: usize, y: usize, c: u8, color: &PixelColor) {
-        if c != b'A' {
-            return;
-        }
-        for dy in 0..16 {
-            for dx in 0..8 {
-                if ((k_font_a[dy] << dx) & 0x80) != 0 {
-                    self.write(x + dx, y + dy, color);
-                }
-            }
-        }
-    }
 
     #[inline]
     fn pixel(&self, x: usize, y: usize) -> &mut [u8] {

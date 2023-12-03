@@ -1,34 +1,18 @@
 #![no_std]
 #![no_main]
 
+mod font;
+mod frame_buffer_config;
 mod graphics;
 mod placement;
 
 use core::{arch::asm, mem::size_of, panic::PanicInfo};
+use font::write_ascii;
+use frame_buffer_config::{FrameBufferConfig, PixelFormat};
 use graphics::{
-    BgrResv8BitPerColorPixelWriter, FrameBufferConfig, PixelColor, PixelFormat, PixelWriter,
-    RgbResv8BitPerColorPixelWriter,
+    BgrResv8BitPerColorPixelWriter, PixelColor, PixelWriter, RgbResv8BitPerColorPixelWriter,
 };
 use placement::new_mut_with_buf;
-
-const k_font_a: [u8; 16] = [
-    0b00000000, //
-    0b00011000, //    **
-    0b00011000, //    **
-    0b00011000, //    **
-    0b00011000, //    **
-    0b00100100, //   *  *
-    0b00100100, //   *  *
-    0b00100100, //   *  *
-    0b00100100, //   *  *
-    0b01111110, //  ******
-    0b01000010, //  *    *
-    0b01000010, //  *    *
-    0b01000010, //  *    *
-    0b11100111, // ***  ***
-    0b00000000, //
-    0b00000000, //
-];
 
 #[no_mangle]
 pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
@@ -69,8 +53,8 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
     }
 
     // 文字の描画
-    pixel_writer.write_ascii(50, 50, b'A', &PixelColor::new(0, 0, 0));
-    pixel_writer.write_ascii(58, 50, b'A', &PixelColor::new(0, 0, 0));
+    write_ascii(pixel_writer, 50, 50, b'A', &PixelColor::new(0, 0, 0));
+    write_ascii(pixel_writer, 58, 50, b'A', &PixelColor::new(0, 0, 0));
 
     halt();
 }
