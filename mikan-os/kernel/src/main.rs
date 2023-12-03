@@ -16,7 +16,6 @@ use graphics::{
     BgrResv8BitPerColorPixelWriter, PixelColor, PixelWriter, RgbResv8BitPerColorPixelWriter,
 };
 use placement::new_mut_with_buf;
-use string::StringU8;
 
 #[no_mangle]
 pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
@@ -55,14 +54,8 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
         PixelColor::new(255, 255, 255),
     );
 
-    let mut buf = [0u8; 128];
-    let mut str_buf = StringU8::new(&mut buf);
-    // write!(str_buf, "line {}\n", 0).unwrap();
-    // console.put_string(str_buf.to_string());
     for i in 0..27 {
-        str_buf.clear();
-        write!(str_buf, "line {}\n", i).unwrap();
-        console.put_string(str_buf.to_string());
+        write!(console, "line {}\n", i).unwrap();
     }
 
     halt();

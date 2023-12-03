@@ -84,3 +84,22 @@ impl<'a> Console<'a> {
         }
     }
 }
+
+impl<'a> Write for Console<'a> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        if !s.is_ascii() {
+            return Err(fmt::Error);
+        }
+
+        let s = s.as_bytes();
+        let lines = (s.len() + COLUMN_NUM - 1) / COLUMN_NUM;
+        for i in 0..lines {
+            if i == lines - 1 {
+                self.put_string(&s[COLUMN_NUM * i..s.len()]);
+            } else {
+                self.put_string(&s[COLUMN_NUM * i..COLUMN_NUM * (i + 1)]);
+            }
+        }
+        Ok(())
+    }
+}
