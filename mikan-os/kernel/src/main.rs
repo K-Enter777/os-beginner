@@ -1,13 +1,19 @@
 #![no_std]
 #![no_main]
 
+mod console;
+mod font;
+mod font_data;
+mod frame_buffer_config;
 mod graphics;
 mod placement;
+mod string;
 
-use core::{arch::asm, mem::size_of, panic::PanicInfo};
+use console::Console;
+use core::{arch::asm, fmt::Write, mem::size_of, panic::PanicInfo};
+use frame_buffer_config::{FrameBufferConfig, PixelFormat};
 use graphics::{
-    BgrResv8BitPerColorPixelWriter, FrameBufferConfig, PixelColor, PixelFormat, PixelWriter,
-    RgbResv8BitPerColorPixelWriter,
+    BgrResv8BitPerColorPixelWriter, PixelColor, PixelWriter, RgbResv8BitPerColorPixelWriter,
 };
 use placement::new_mut_with_buf;
 
@@ -35,16 +41,21 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
         }
     };
 
+    // 背景を白で塗りつぶす
     for x in 0..pixel_writer.config().horizontal_resolution {
         for y in 0..pixel_writer.config().vertical_resolution {
             pixel_writer.write(x, y, &PixelColor::new(u8::MAX, u8::MAX, u8::MAX));
         }
     }
 
-    for x in 0..200 {
-        for y in 0..100 {
-            pixel_writer.write(100 + x, 100 + y, &PixelColor::new(0, 255, 0));
-        }
+    let mut console = Console::new(
+        pixel_writer,
+        PixelColor::new(0, 0, 0),
+        PixelColor::new(255, 255, 255),
+    );
+
+    for i in 0..27 {
+        write!(console, "line {}\n", i).unwrap();
     }
 
     halt();
