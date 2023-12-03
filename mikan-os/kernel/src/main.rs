@@ -2,9 +2,11 @@
 #![no_main]
 
 mod font;
+mod font_data;
 mod frame_buffer_config;
 mod graphics;
 mod placement;
+mod string;
 
 use core::{arch::asm, mem::size_of, panic::PanicInfo};
 use font::write_ascii;
@@ -52,11 +54,12 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
         }
     }
 
-    // 文字の描画
-    write_ascii(pixel_writer, 50, 50, b'A', &PixelColor::new(0, 0, 0));
-    write_ascii(pixel_writer, 58, 50, b'A', &PixelColor::new(0, 0, 0));
-
-    halt();
+    // 文字一覧を描画
+    let mut i = 0;
+    for c in b'!'..=b'~' {
+        write_ascii(pixel_writer, 8 * i, 50, c, &PixelColor::new(0, 0, 0));
+        i += 1;
+    }
 }
 
 #[panic_handler]
