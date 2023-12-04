@@ -7,7 +7,7 @@ use core::{
 
 use crate::{
     font::{write_ascii, write_string},
-    graphics::{PixelColor, PixelWriter},
+    graphics::{PixelColor, PixelWriter, Vector2D},
 };
 
 const ROW_NUM: usize = 25;
@@ -45,8 +45,7 @@ impl<'a> Console<'a> {
             } else if (self.cursor_column < COLUMN_NUM) {
                 write_ascii(
                     self.writer,
-                    8 * self.cursor_column,
-                    16 * self.cursor_row,
+                    Vector2D::new(8 * self.cursor_column as u32, 16 * self.cursor_row as u32),
                     c,
                     &self.fg_color,
                 );
@@ -65,7 +64,8 @@ impl<'a> Console<'a> {
             // 背景の描画
             for y in 0..16 * ROW_NUM {
                 for x in 0..8 * COLUMN_NUM {
-                    self.writer.write(x, y, &self.bg_color);
+                    self.writer
+                        .write(Vector2D::new(x as u32, y as u32), &self.bg_color);
                 }
             }
 
@@ -78,7 +78,12 @@ impl<'a> Console<'a> {
                         COLUMN_NUM,
                     );
                 }
-                write_string(self.writer, 0, 16 * row, &self.buffer[row], &self.fg_color);
+                write_string(
+                    self.writer,
+                    Vector2D::new(0, 16 * row as u32),
+                    &self.buffer[row],
+                    &self.fg_color,
+                );
             }
             self.buffer[ROW_NUM - 1] = [0u8; COLUMN_NUM];
         }

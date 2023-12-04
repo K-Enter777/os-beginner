@@ -14,6 +14,7 @@ use core::{arch::asm, fmt::Write, mem::size_of, panic::PanicInfo};
 use frame_buffer_config::{FrameBufferConfig, PixelFormat};
 use graphics::{
     BgrResv8BitPerColorPixelWriter, PixelColor, PixelWriter, RgbResv8BitPerColorPixelWriter,
+    Vector2D,
 };
 use placement::new_mut_with_buf;
 
@@ -44,16 +45,21 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
     // 背景を白で塗りつぶす
     for x in 0..pixel_writer.config().horizontal_resolution {
         for y in 0..pixel_writer.config().vertical_resolution {
-            pixel_writer.write(x, y, &PixelColor::new(u8::MAX, u8::MAX, u8::MAX));
+            pixel_writer.write(
+                Vector2D::new(x as u32, y as u32),
+                &PixelColor::new(255, 255, 255),
+            );
         }
     }
 
+    // コンソールの生成
     let mut console = Console::new(
         pixel_writer,
         PixelColor::new(0, 0, 0),
         PixelColor::new(255, 255, 255),
     );
 
+    // line i を 0 <= i < 27 でコンソールに出力
     for i in 0..27 {
         write!(console, "line {}\n", i).unwrap();
     }
