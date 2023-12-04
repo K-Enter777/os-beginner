@@ -10,13 +10,50 @@ mod placement;
 mod string;
 
 use console::Console;
-use core::{arch::asm, fmt::Write, mem::size_of, panic::PanicInfo};
+use core::{arch::asm, mem::size_of, panic::PanicInfo};
 use frame_buffer_config::{FrameBufferConfig, PixelFormat};
 use graphics::{
     BgrResv8BitPerColorPixelWriter, PixelColor, PixelWriter, RgbResv8BitPerColorPixelWriter,
     Vector2D,
 };
 use placement::new_mut_with_buf;
+
+/// デスクトップ背景の色
+const DESKTOP_BG_COLOR: PixelColor = PixelColor::new(45, 118, 237);
+/// デスクトップ前景の色
+const DESKTOP_FG_COLOR: PixelColor = PixelColor::new(255, 255, 255);
+
+/// マウスカーソルの横幅
+const MOUSE_CURSOR_WIDTH: usize = 15;
+/// マウスカーソルの高さ
+const MOUSE_CURSOR_HEIGHT: usize = 24;
+/// マウスカーソルの形
+const MOUSE_CURSOR_SHAPE: [&[u8; MOUSE_CURSOR_WIDTH]; MOUSE_CURSOR_HEIGHT] = [
+    b"@              ",
+    b"@@             ",
+    b"@.@            ",
+    b"@..@           ",
+    b"@...@          ",
+    b"@....@         ",
+    b"@.....@        ",
+    b"@......@       ",
+    b"@.......@      ",
+    b"@........@     ",
+    b"@.........@    ",
+    b"@..........@   ",
+    b"@...........@  ",
+    b"@............@ ",
+    b"@......@@@@@@@@",
+    b"@......@       ",
+    b"@....@@.@      ",
+    b"@...@ @.@      ",
+    b"@..@   @.@     ",
+    b"@.@    @.@     ",
+    b"@@      @.@    ",
+    b"@       @.@    ",
+    b"         @.@   ",
+    b"         @@@   ",
+];
 
 #[no_mangle]
 pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
@@ -42,26 +79,55 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
         }
     };
 
-    // 背景を白で塗りつぶす
-    for x in 0..pixel_writer.config().horizontal_resolution {
-        for y in 0..pixel_writer.config().vertical_resolution {
-            pixel_writer.write(
-                Vector2D::new(x as u32, y as u32),
-                &PixelColor::new(255, 255, 255),
-            );
-        }
-    }
+    let frame_width = pixel_writer.config().horizontal_resolution as u32;
+    let frame_height = pixel_writer.config().vertical_resolution as u32;
 
-    // コンソールの生成
-    let mut console = Console::new(
-        pixel_writer,
-        PixelColor::new(0, 0, 0),
-        PixelColor::new(255, 255, 255),
+    // デスクトップ背景の描画
+    pixel_writer.fill_rectangle(
+        Vector2D::new(0, 0),
+        Vector2D::new(frame_width, frame_height - 50),
+        &DESKTOP_BG_COLOR,
+    );
+    // タスクバーの表示
+    pixel_writer.fill_rectangle(
+        Vector2D::new(0, frame_height - 50),
+        Vector2D::new(frame_width, 50),
+        &PixelColor::new(1, 8, 17),
+    );
+    // （多分）Windows の検索窓
+    pixel_writer.fill_rectangle(
+        Vector2D::new(0, frame_height - 50),
+        Vector2D::new(frame_width / 5, 50),
+        &PixelColor::new(80, 80, 80),
+    );
+    // （多分）Windows のスタートボタン
+    pixel_writer.fill_rectangle(
+        Vector2D::new(10, frame_height - 40),
+        Vector2D::new(30, 30),
+        &PixelColor::new(160, 160, 160),
     );
 
-    // line i を 0 <= i < 27 でコンソールに出力
-    for i in 0..27 {
-        write!(console, "line {}\n", i).unwrap();
+    // コンソールの生成
+    let mut console = Console::new(pixel_writer, &DESKTOP_FG_COLOR, &DESKTOP_BG_COLOR);
+
+    // welcome 文
+    console.put_string(b"Welcome to MikanOS!\n");
+
+    // マウスカーソルの描画
+    for dy in 0..MOUSE_CURSOR_HEIGHT {
+        for dx in 0..MOUSE_CURSOR_WIDTH {
+            if MOUSE_CURSOR_SHAPE[dy][dx] == b'@' {
+                pixel_writer.write(
+                    Vector2D::new(200 + dx as u32, 100 + dy as u32),
+                    &PixelColor::new(0, 0, 0),
+                );
+            } else if MOUSE_CURSOR_SHAPE[dy][dx] == b'.' {
+                pixel_writer.write(
+                    Vector2D::new(200 + dx as u32, 100 + dy as u32),
+                    &PixelColor::new(255, 255, 255),
+                );
+            }
+        }
     }
 
     halt();

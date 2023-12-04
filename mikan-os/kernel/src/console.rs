@@ -15,8 +15,8 @@ const COLUMN_NUM: usize = 80;
 
 pub(crate) struct Console<'a> {
     writer: &'a dyn PixelWriter,
-    fg_color: PixelColor,
-    bg_color: PixelColor,
+    fg_color: &'a PixelColor,
+    bg_color: &'a PixelColor,
     buffer: [[u8; COLUMN_NUM]; ROW_NUM],
     cursor_row: usize,
     cursor_column: usize,
@@ -25,8 +25,8 @@ pub(crate) struct Console<'a> {
 impl<'a> Console<'a> {
     pub(crate) fn new(
         writer: &'a dyn PixelWriter,
-        fg_color: PixelColor,
-        bg_color: PixelColor,
+        fg_color: &'a PixelColor,
+        bg_color: &'a PixelColor,
     ) -> Self {
         Self {
             writer,
