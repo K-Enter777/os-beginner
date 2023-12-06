@@ -2,15 +2,18 @@
 #![no_main]
 
 mod console;
+mod error;
 mod font;
 mod font_data;
 mod frame_buffer_config;
 mod graphics;
+mod io;
+mod pci;
 mod placement;
 mod string;
 
 use console::Console;
-use core::{arch::asm, mem::size_of, panic::PanicInfo};
+use core::{arch::asm, fmt::Write, mem::size_of, panic::PanicInfo};
 use frame_buffer_config::{FrameBufferConfig, PixelFormat};
 use graphics::{
     BgrResv8BitPerColorPixelWriter, PixelColor, PixelWriter, RgbResv8BitPerColorPixelWriter,
@@ -128,6 +131,29 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
                 );
             }
         }
+    }
+
+    // デバイス一覧の表示
+    let err = pci::scan_all_bus();
+    write!(console, "scan_all_bus: {}\n", err).unwrap();
+
+    let devices = pci::DEVICES.lock().take();
+    let num_devices = pci::NUM_DEVICES.lock().take();
+    for i in 0..num_devices {
+        let dev = devices[i].unwrap();
+        let vendor_id = pci::read_vendor_id(dev.bus(), dev.device(), dev.function());
+        let class_code = pci::read_class_code(dev.bus(), dev.device(), dev.function());
+        write!(
+            console,
+            "{}.{}.{}: vend {:04x}, class {:08x}, head {:02x}\n",
+            dev.bus(),
+            dev.device(),
+            dev.function(),
+            vendor_id,
+            class_code,
+            dev.header_type()
+        )
+        .unwrap();
     }
 
     halt();

@@ -38,7 +38,6 @@ pub(crate) trait PixelWriter {
     /// フレームバッファの情報を提供する。
     fn config(&self) -> &FrameBufferConfig;
 
-    #[inline]
     /// ピクセルの位置から、そのピクセルを塗るための配列を提供する。
     fn pixel_at(&self, pos: Vector2D<u32>) -> &mut [u8] {
         unsafe {
@@ -134,19 +133,16 @@ pub(crate) struct Vector2D<T> {
 
 impl<T: Copy + Add + AddAssign + Sub + SubAssign> Vector2D<T> {
     /// 初期化。
-    #[inline]
     pub(crate) const fn new(x: T, y: T) -> Self {
         Self { x, y }
     }
 
     /// x 成分を返す。
-    #[inline]
     pub(crate) const fn x(&self) -> T {
         self.x
     }
 
     /// y 成分を返す。
-    #[inline]
     pub(crate) const fn y(&self) -> T {
         self.y
     }
