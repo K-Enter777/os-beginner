@@ -13,13 +13,35 @@ mod placement;
 mod string;
 
 use console::Console;
-use core::{arch::asm, fmt::Write, mem::size_of, panic::PanicInfo};
+use core::{arch::asm, cell::OnceCell, fmt::Write, mem::size_of, panic::PanicInfo};
 use frame_buffer_config::{FrameBufferConfig, PixelFormat};
 use graphics::{
     BgrResv8BitPerColorPixelWriter, PixelColor, PixelWriter, RgbResv8BitPerColorPixelWriter,
     Vector2D,
 };
 use placement::new_mut_with_buf;
+
+const PIXEL_WRITER_SIZE: usize = size_of::<RgbResv8BitPerColorPixelWriter>();
+static mut PIXEL_WRITER_BUF: [u8; PIXEL_WRITER_SIZE] = [0u8; PIXEL_WRITER_SIZE];
+static mut CONSOLE: OnceCell<Console> = OnceCell::new();
+
+#[macro_export]
+macro_rules! printk {
+    ($($arg:tt)*) => {
+        unsafe {
+            match CONSOLE.get_mut() {
+                Some(console) => write!(console, $($arg)*).unwrap(),
+                None => $crate::halt(),
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! printkln {
+    () => (printk!("\n"));
+    ($($arg:tt)*) => (printk!("{}\n", format_args!($($arg)*)));
+}
 
 /// デスクトップ背景の色
 const DESKTOP_BG_COLOR: PixelColor = PixelColor::new(45, 118, 237);
@@ -60,22 +82,25 @@ const MOUSE_CURSOR_SHAPE: [&[u8; MOUSE_CURSOR_WIDTH]; MOUSE_CURSOR_HEIGHT] = [
 
 #[no_mangle]
 pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
-    let mut pixel_writer_buf = [0u8; size_of::<RgbResv8BitPerColorPixelWriter>()];
     let pixel_writer: &mut dyn PixelWriter = match frame_buffer_config.pixel_format {
         PixelFormat::Rgb => {
-            match new_mut_with_buf(
-                RgbResv8BitPerColorPixelWriter::new(frame_buffer_config),
-                &mut pixel_writer_buf,
-            ) {
+            match unsafe {
+                new_mut_with_buf(
+                    RgbResv8BitPerColorPixelWriter::new(frame_buffer_config),
+                    &mut PIXEL_WRITER_BUF,
+                )
+            } {
                 Err(_size) => halt(),
                 Ok(writer) => writer,
             }
         }
         PixelFormat::Bgr => {
-            match new_mut_with_buf(
-                BgrResv8BitPerColorPixelWriter::new(frame_buffer_config),
-                &mut pixel_writer_buf,
-            ) {
+            match unsafe {
+                new_mut_with_buf(
+                    BgrResv8BitPerColorPixelWriter::new(frame_buffer_config),
+                    &mut PIXEL_WRITER_BUF,
+                )
+            } {
                 Err(_size) => halt(),
                 Ok(writer) => writer,
             }
@@ -111,10 +136,12 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
     );
 
     // コンソールの生成
-    let mut console = Console::new(pixel_writer, &DESKTOP_FG_COLOR, &DESKTOP_BG_COLOR);
+    unsafe {
+        CONSOLE.get_or_init(|| Console::new(pixel_writer, &DESKTOP_FG_COLOR, &DESKTOP_BG_COLOR));
+    }
 
     // welcome 文
-    console.put_string(b"Welcome to MikanOS!\n");
+    printk!("Welcome to MikanOS!\n");
 
     // マウスカーソルの描画
     for dy in 0..MOUSE_CURSOR_HEIGHT {
@@ -135,7 +162,7 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
 
     // デバイス一覧の表示
     let err = pci::scan_all_bus();
-    write!(console, "scan_all_bus: {}\n", err).unwrap();
+    printk!("scan_all_bus: {}\n", err);
 
     let devices = pci::DEVICES.lock().take();
     let num_devices = pci::NUM_DEVICES.lock().take();
@@ -143,8 +170,7 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
         let dev = devices[i].unwrap();
         let vendor_id = pci::read_vendor_id(dev.bus(), dev.device(), dev.function());
         let class_code = pci::read_class_code(dev.bus(), dev.device(), dev.function());
-        write!(
-            console,
+        printk!(
             "{}.{}.{}: vend {:04x}, class {:08x}, head {:02x}\n",
             dev.bus(),
             dev.device(),
@@ -152,8 +178,7 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
             vendor_id,
             class_code,
             dev.header_type()
-        )
-        .unwrap();
+        );
     }
 
     halt();
