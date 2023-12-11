@@ -8,6 +8,7 @@ mod font_data;
 mod frame_buffer_config;
 mod graphics;
 mod io;
+mod logger;
 mod pci;
 mod placement;
 mod string;
@@ -20,6 +21,8 @@ use graphics::{
     Vector2D,
 };
 use placement::new_mut_with_buf;
+
+use crate::logger::{set_log_level, LogLevel};
 
 const PIXEL_WRITER_SIZE: usize = size_of::<RgbResv8BitPerColorPixelWriter>();
 static mut PIXEL_WRITER_BUF: [u8; PIXEL_WRITER_SIZE] = [0u8; PIXEL_WRITER_SIZE];
@@ -142,6 +145,7 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
 
     // welcome 文
     printk!("Welcome to MikanOS!\n");
+    set_log_level(LogLevel::Warn);
 
     // マウスカーソルの描画
     for dy in 0..MOUSE_CURSOR_HEIGHT {
@@ -162,7 +166,7 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
 
     // デバイス一覧の表示
     let err = pci::scan_all_bus();
-    printk!("scan_all_bus: {}\n", err);
+    log!(LogLevel::Debug, "scan_all_bus: {}", err);
 
     let devices = pci::DEVICES.lock().take();
     let num_devices = pci::NUM_DEVICES.lock().take();
@@ -170,8 +174,9 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
         let dev = devices[i].unwrap();
         let vendor_id = pci::read_vendor_id(dev.bus(), dev.device(), dev.function());
         let class_code = pci::read_class_code(dev.bus(), dev.device(), dev.function());
-        printk!(
-            "{}.{}.{}: vend {:04x}, class {:08x}, head {:02x}\n",
+        log!(
+            LogLevel::Debug,
+            "{}.{}.{}: vend {:04x}, class {:08x}, head {:02x}",
             dev.bus(),
             dev.device(),
             dev.function(),
