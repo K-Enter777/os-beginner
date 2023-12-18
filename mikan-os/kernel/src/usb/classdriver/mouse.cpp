@@ -33,6 +33,10 @@ namespace usb {
 
   std::function<HIDMouseDriver::ObserverType> HIDMouseDriver::default_observer;
 
+  void HIDMouseDriver::SetDefaultObserver(HIDMouseDriver::ObserverType *observer) {
+    HIDMouseDriver::default_observer = *observer;
+  }
+
   void HIDMouseDriver::NotifyMouseMove(int8_t displacement_x, int8_t displacement_y) {
     for (int i = 0; i < num_observers_; ++i) {
       observers_[i](displacement_x, displacement_y);

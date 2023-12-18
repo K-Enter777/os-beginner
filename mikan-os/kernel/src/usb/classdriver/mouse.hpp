@@ -22,6 +22,7 @@ namespace usb {
     using ObserverType = void (int8_t displacement_x, int8_t displacement_y);
     void SubscribeMouseMove(std::function<ObserverType> observer);
     static std::function<ObserverType> default_observer;
+    static void SetDefaultObserver(ObserverType *observer);
 
    private:
     std::array<std::function<ObserverType>, 4> observers_;
