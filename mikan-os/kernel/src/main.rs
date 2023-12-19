@@ -9,9 +9,11 @@ mod frame_buffer_config;
 mod graphics;
 mod io;
 mod logger;
+mod mouse;
 mod pci;
 mod placement;
 mod string;
+mod usb;
 
 use console::Console;
 use core::{arch::asm, cell::OnceCell, fmt::Write, mem::size_of, panic::PanicInfo};
@@ -20,9 +22,19 @@ use graphics::{
     BgrResv8BitPerColorPixelWriter, PixelColor, PixelWriter, RgbResv8BitPerColorPixelWriter,
     Vector2D,
 };
+use mouse::MouseCursor;
+use pci::Device;
 use placement::new_mut_with_buf;
 
-use crate::logger::{set_log_level, LogLevel};
+use crate::{
+    logger::{set_log_level, LogLevel},
+    usb::{Controller, HIDMouseDriver},
+};
+
+/// デスクトップ背景の色
+const DESKTOP_BG_COLOR: PixelColor = PixelColor::new(45, 118, 237);
+/// デスクトップ前景の色
+const DESKTOP_FG_COLOR: PixelColor = PixelColor::new(255, 255, 255);
 
 const PIXEL_WRITER_SIZE: usize = size_of::<RgbResv8BitPerColorPixelWriter>();
 static mut PIXEL_WRITER_BUF: [u8; PIXEL_WRITER_SIZE] = [0u8; PIXEL_WRITER_SIZE];
@@ -46,42 +58,43 @@ macro_rules! printkln {
     ($($arg:tt)*) => (printk!("{}\n", format_args!($($arg)*)));
 }
 
-/// デスクトップ背景の色
-const DESKTOP_BG_COLOR: PixelColor = PixelColor::new(45, 118, 237);
-/// デスクトップ前景の色
-const DESKTOP_FG_COLOR: PixelColor = PixelColor::new(255, 255, 255);
+static mut MOUSE_CURSOR: OnceCell<MouseCursor> = OnceCell::new();
 
-/// マウスカーソルの横幅
-const MOUSE_CURSOR_WIDTH: usize = 15;
-/// マウスカーソルの高さ
-const MOUSE_CURSOR_HEIGHT: usize = 24;
-/// マウスカーソルの形
-const MOUSE_CURSOR_SHAPE: [&[u8; MOUSE_CURSOR_WIDTH]; MOUSE_CURSOR_HEIGHT] = [
-    b"@              ",
-    b"@@             ",
-    b"@.@            ",
-    b"@..@           ",
-    b"@...@          ",
-    b"@....@         ",
-    b"@.....@        ",
-    b"@......@       ",
-    b"@.......@      ",
-    b"@........@     ",
-    b"@.........@    ",
-    b"@..........@   ",
-    b"@...........@  ",
-    b"@............@ ",
-    b"@......@@@@@@@@",
-    b"@......@       ",
-    b"@....@@.@      ",
-    b"@...@ @.@      ",
-    b"@..@   @.@     ",
-    b"@.@    @.@     ",
-    b"@@      @.@    ",
-    b"@       @.@    ",
-    b"         @.@   ",
-    b"         @@@   ",
-];
+fn mouse_observer(displacement_x: i8, displacement_y: i8) {
+    let cursor = match unsafe { MOUSE_CURSOR.get_mut() } {
+        None => halt(),
+        Some(cursor) => cursor,
+    };
+    cursor.move_relative(Vector2D::new(displacement_x as u32, displacement_y as u32));
+}
+
+fn switch_ehci2xhci(xhc_dev: &Device) {
+    let mut intel_ehc_exist = false;
+    let num_device = pci::NUM_DEVICES.lock().take();
+    let devices = pci::DEVICES.lock().take();
+    for i in 0..num_device {
+        if devices[i].unwrap().class_code().r#match(0x0c, 0x03, 0x20)
+            && devices[i].unwrap().read_vendor_id() == 0x8086
+        {
+            intel_ehc_exist = true;
+            break;
+        }
+    }
+    if !intel_ehc_exist {
+        return;
+    }
+
+    let superspeed_ports = xhc_dev.read_conf_reg(0xdc);
+    xhc_dev.write_conf_reg(0xd8, superspeed_ports);
+    let ehci2xhci_ports = xhc_dev.read_conf_reg(0xd4);
+    xhc_dev.write_conf_reg(0xd0, ehci2xhci_ports);
+    log!(
+        LogLevel::Debug,
+        "switch_ehci2xhci: SS = {:02}, xHCI = {:02x}",
+        superspeed_ports,
+        ehci2xhci_ports
+    );
+}
 
 #[no_mangle]
 pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
@@ -147,21 +160,11 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
     printk!("Welcome to MikanOS!\n");
     set_log_level(LogLevel::Warn);
 
-    // マウスカーソルの描画
-    for dy in 0..MOUSE_CURSOR_HEIGHT {
-        for dx in 0..MOUSE_CURSOR_WIDTH {
-            if MOUSE_CURSOR_SHAPE[dy][dx] == b'@' {
-                pixel_writer.write(
-                    Vector2D::new(200 + dx as u32, 100 + dy as u32),
-                    &PixelColor::new(0, 0, 0),
-                );
-            } else if MOUSE_CURSOR_SHAPE[dy][dx] == b'.' {
-                pixel_writer.write(
-                    Vector2D::new(200 + dx as u32, 100 + dy as u32),
-                    &PixelColor::new(255, 255, 255),
-                );
-            }
-        }
+    // マウスカーソルの生成
+    unsafe {
+        MOUSE_CURSOR.get_or_init(|| {
+            MouseCursor::new(pixel_writer, DESKTOP_BG_COLOR, Vector2D::new(300, 200))
+        });
     }
 
     // デバイス一覧の表示
@@ -184,6 +187,78 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
             class_code,
             dev.header_type()
         );
+    }
+
+    // Intel 製を優先して xHC を探す
+    let mut xhc_dev = None;
+    for i in 0..num_devices {
+        if devices[i].unwrap().class_code().r#match(0x0c, 0x03, 0x30) {
+            xhc_dev = devices[i];
+
+            if 0x8086 == xhc_dev.unwrap().read_vendor_id() {
+                break;
+            }
+        }
+    }
+
+    if xhc_dev.is_none() {
+        log!(LogLevel::Error, "There is no xHC devices.");
+        halt();
+    }
+
+    let xhc_dev = xhc_dev.unwrap();
+    log!(
+        LogLevel::Info,
+        "xHC has been found: {}.{}.{}",
+        xhc_dev.bus(),
+        xhc_dev.device(),
+        xhc_dev.function()
+    );
+
+    // xHC の BAR から情報を得る
+    let xhc_bar = xhc_dev.read_bar(0);
+    log!(LogLevel::Debug, "ReadBar: {}", xhc_bar.error());
+    let xhc_mmio_base = *xhc_bar.value() & !0xf;
+    log!(LogLevel::Debug, "xHC mmio_base = {:08x}", xhc_mmio_base);
+
+    let mut xhc = Controller::new(xhc_mmio_base);
+
+    if xhc_dev.read_vendor_id() == 0x8086 {
+        switch_ehci2xhci(&xhc_dev);
+    }
+    {
+        let err = xhc.initialize();
+        log!(LogLevel::Debug, "xhc.initialize: {}", err);
+    }
+
+    log!(LogLevel::Info, "xHC starting");
+    xhc.run();
+
+    HIDMouseDriver::set_default_observer(mouse_observer);
+
+    for i in 1..=xhc.max_ports() {
+        let mut port = xhc.port_at(i);
+        log!(
+            LogLevel::Debug,
+            "Port {}: IsConnected={}",
+            i,
+            port.is_connected()
+        );
+
+        if port.is_connected() {
+            let err = xhc.configure_port(&mut port);
+            if (&err).into() {
+                log!(LogLevel::Error, "failed to configure port: {}", err);
+                continue;
+            }
+        }
+    }
+
+    loop {
+        let err = xhc.process_event();
+        if (&err).into() {
+            log!(LogLevel::Error, "Error while process_event: {}", err);
+        }
     }
 
     halt();

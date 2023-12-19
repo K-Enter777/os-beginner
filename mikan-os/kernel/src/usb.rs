@@ -49,9 +49,6 @@ extern "C" {
     #[link_name = "_ZN3usb4xhci10Controller3RunEv"]
     fn controller_run(this: *mut Controller) -> CxxError;
 
-    // #[link_name = "_ZNK3usb4xhci10Controller8MaxPortsEv"]
-    // fn controller_max_ports(this: *const Controller) -> c_schar;
-
     #[link_name = "_ZN3usb4xhci10Controller6PortAtEh"]
     fn controller_port_at(this: *mut Controller, port_num: c_uchar) -> Port;
 
@@ -60,9 +57,6 @@ extern "C" {
 
     #[link_name = "_ZN3usb4xhci12ProcessEventERNS0_10ControllerE"]
     fn xhci_process_event(xhc: *mut Controller) -> CxxError;
-
-    #[link_name = "_ZN3usb14HIDMouseDriver16default_observerE"]
-    static mut HID_MOUSE_DRIVER_DEFAULT_OBSERVER: Function;
 
     #[link_name = "_ZN3usb14HIDMouseDriver18SetDefaultObserverEPFvaaE"]
     fn hid_mouse_driver_set_default_observer(observer: *const c_void);

@@ -116,17 +116,17 @@ impl Device {
         read_vendor_id(self.bus, self.device, self.function)
     }
 
-    fn read_conf_reg(&self, reg_addr: u8) -> u32 {
+    pub(crate) fn read_conf_reg(&self, reg_addr: u8) -> u32 {
         write_address(make_address(self.bus, self.device, self.function, reg_addr));
         read_data()
     }
 
-    fn write_conf_reg(&self, reg_addr: u8, value: u32) {
+    pub(crate) fn write_conf_reg(&self, reg_addr: u8, value: u32) {
         write_address(make_address(self.bus, self.device, self.function, reg_addr));
         write_data(value);
     }
 
-    fn read_bar(&self, bar_index: u32) -> WithError<u64> {
+    pub(crate) fn read_bar(&self, bar_index: u32) -> WithError<u64> {
         if bar_index >= 6 {
             return WithError::new(0, make_error!(error::Code::IndexOutOfRange));
         }

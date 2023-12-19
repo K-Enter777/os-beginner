@@ -3,6 +3,7 @@
 use core::fmt::{self, Display};
 
 #[derive(PartialEq, Eq, Clone, Copy)]
+#[repr(C)]
 pub(crate) enum Code {
     Success,
     Full,
@@ -75,6 +76,7 @@ impl Display for Code {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct Error {
     code: Code,
     line: u32,
@@ -132,5 +134,13 @@ pub(crate) struct WithError<T> {
 impl<T> WithError<T> {
     pub(crate) fn new(value: T, error: Error) -> Self {
         Self { value, error }
+    }
+
+    pub(crate) fn value(&self) -> &T {
+        &self.value
+    }
+
+    pub(crate) fn error(&self) -> Error {
+        self.error
     }
 }
