@@ -1,0 +1,30 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/mikan-os/kernel/src",
+                "${workspaceFolder}/mikan-os/kernel/src/cxx",
+                "${workspaceFolder}/mikan-os/kernel/src/usb",
+                "${workspaceFolder}/mikan-os/kernel/src/usb/xhci",
+                "${workspaceFolder}/devenv/x86_64-elf/include",
+                "${workspaceFolder}/devenv/x86_64-elf/include/c++/v1"
+            ],
+            "defines": [],
+            "compilerPath": "/usr/bin/clang++",
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "linux-clang-x64",
+            "configurationProvider": "ms-vscode.cpptools",
+            "compilerArgs": [
+                "-ffreestanding",
+                "-mno-red-zone",
+                "-fno-exceptions",
+                "-fno-rtti",
+                "-std=c++17"
+            ]
+        }
+    ],
+    "version": 4
+}
