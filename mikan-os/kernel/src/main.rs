@@ -70,8 +70,9 @@ fn mouse_observer(displacement_x: i8, displacement_y: i8) {
 
 fn switch_ehci2xhci(xhc_dev: &Device) {
     let mut intel_ehc_exist = false;
-    let num_device = pci::NUM_DEVICES.lock().take();
-    let devices = pci::DEVICES.lock().take();
+    let num_device = *pci::NUM_DEVICES.lock().borrow();
+    let devices = pci::DEVICES.lock();
+    let devices = devices.borrow();
     for i in 0..num_device {
         if devices[i].unwrap().class_code().r#match(0x0c, 0x03, 0x20)
             && devices[i].unwrap().read_vendor_id() == 0x8086
@@ -90,7 +91,7 @@ fn switch_ehci2xhci(xhc_dev: &Device) {
     xhc_dev.write_conf_reg(0xd0, ehci2xhci_ports);
     log!(
         LogLevel::Debug,
-        "switch_ehci2xhci: SS = {:02}, xHCI = {:02x}",
+        "switch_ehci2xhci: SS = {:02x}, xHCI = {:02x}",
         superspeed_ports,
         ehci2xhci_ports
     );
@@ -171,39 +172,42 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
     let err = pci::scan_all_bus();
     log!(LogLevel::Debug, "scan_all_bus: {}", err);
 
-    let devices = pci::DEVICES.lock().take();
-    let num_devices = pci::NUM_DEVICES.lock().take();
-    for i in 0..num_devices {
-        let dev = devices[i].unwrap();
-        let vendor_id = pci::read_vendor_id(dev.bus(), dev.device(), dev.function());
-        let class_code = pci::read_class_code(dev.bus(), dev.device(), dev.function());
-        log!(
-            LogLevel::Debug,
-            "{}.{}.{}: vend {:04x}, class {:08x}, head {:02x}",
-            dev.bus(),
-            dev.device(),
-            dev.function(),
-            vendor_id,
-            class_code,
-            dev.header_type()
-        );
-    }
-
-    // Intel 製を優先して xHC を探す
     let mut xhc_dev = None;
-    for i in 0..num_devices {
-        if devices[i].unwrap().class_code().r#match(0x0c, 0x03, 0x30) {
-            xhc_dev = devices[i];
+    {
+        let devices = pci::DEVICES.lock();
+        let devices = devices.borrow();
+        let num_devices = *pci::NUM_DEVICES.lock().borrow();
+        for i in 0..num_devices {
+            let dev = devices[i].unwrap();
+            let vendor_id = pci::read_vendor_id(dev.bus(), dev.device(), dev.function());
+            let class_code = pci::read_class_code(dev.bus(), dev.device(), dev.function());
+            log!(
+                LogLevel::Debug,
+                "{}.{}.{}: vend {:04x}, class {:08x}, head {:02x}",
+                dev.bus(),
+                dev.device(),
+                dev.function(),
+                vendor_id,
+                class_code,
+                dev.header_type()
+            );
+        }
 
-            if 0x8086 == xhc_dev.unwrap().read_vendor_id() {
-                break;
+        // Intel 製を優先して xHC を探す
+        for i in 0..num_devices {
+            if devices[i].unwrap().class_code().r#match(0x0c, 0x03, 0x30) {
+                xhc_dev = devices[i];
+
+                if 0x8086 == xhc_dev.unwrap().read_vendor_id() {
+                    break;
+                }
             }
         }
-    }
 
-    if xhc_dev.is_none() {
-        log!(LogLevel::Error, "There is no xHC devices.");
-        halt();
+        if xhc_dev.is_none() {
+            log!(LogLevel::Error, "There is no xHC devices.");
+            halt();
+        }
     }
 
     let xhc_dev = xhc_dev.unwrap();
