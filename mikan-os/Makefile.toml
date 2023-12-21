@@ -90,3 +90,20 @@ script = '''
 cd kernel
 cargo build
 '''
+
+[tasks.usb]
+command = "${DEVENV_DIR}/make_usb.sh"
+args = [
+    "${@}",
+    "mikan-loader/target/x86_64-unknown-uefi/release/mikan-loader.efi",
+    "kernel/target/x86_64-unknown-none/release/kernel",
+]
+dependencies = ["usb-check", "build"]
+
+[tasks.usb-check]
+script = '''
+if [ $# -ne 1 ]; then
+    echo "Option <drive> is needed"
+    exit 1
+fi
+'''
