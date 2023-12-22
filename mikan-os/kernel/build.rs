@@ -30,7 +30,7 @@ fn main() -> io::Result<()> {
         .file("src/cxx/libcxx_support.cpp")
         .compile("usb");
 
-    println!("cargo:rerun-if-changed=src/*");
+    println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=build.rs");
     Ok(())
 }
