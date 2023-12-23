@@ -7,6 +7,7 @@ mod font;
 mod font_data;
 mod frame_buffer_config;
 mod graphics;
+mod interrupt;
 mod io;
 mod logger;
 mod mouse;
