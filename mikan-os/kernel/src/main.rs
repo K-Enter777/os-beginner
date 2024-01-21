@@ -269,7 +269,8 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
 }
 
 #[panic_handler]
-fn panic(_: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
+    printkln!("panic at {}", info.location().unwrap());
     halt()
 }
 
