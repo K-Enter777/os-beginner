@@ -27,7 +27,7 @@ pub(crate) fn get_log_level() -> LogLevel {
 macro_rules! log {
     ($level:expr, $($arg:tt)*) => {
         if $level <= $crate::logger::get_log_level() {
-            printkln!("{}", format_args!($($arg)*));
+            $crate::printkln!("{}", format_args!($($arg)*));
         }
     }
 }

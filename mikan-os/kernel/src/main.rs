@@ -16,7 +16,7 @@ mod string;
 mod usb;
 
 use console::Console;
-use core::{arch::asm, cell::OnceCell, fmt::Write, mem::size_of, panic::PanicInfo};
+use core::{arch::asm, cell::OnceCell, mem::size_of, panic::PanicInfo};
 use frame_buffer_config::{FrameBufferConfig, PixelFormat};
 use graphics::{
     BgrResv8BitPerColorPixelWriter, PixelColor, PixelWriter, RgbResv8BitPerColorPixelWriter,
@@ -44,7 +44,8 @@ static mut CONSOLE: OnceCell<Console> = OnceCell::new();
 macro_rules! printk {
     ($($arg:tt)*) => {
         unsafe {
-            match CONSOLE.get_mut() {
+            use core::fmt::Write;
+            match $crate::CONSOLE.get_mut() {
                 Some(console) => write!(console, $($arg)*).unwrap(),
                 None => $crate::halt(),
             }
@@ -54,8 +55,8 @@ macro_rules! printk {
 
 #[macro_export]
 macro_rules! printkln {
-    () => (printk!("\n"));
-    ($($arg:tt)*) => (printk!("{}\n", format_args!($($arg)*)));
+    () => ($crate::printk!("\n"));
+    ($($arg:tt)*) => ($crate::printk!("{}\n", format_args!($($arg)*)));
 }
 
 static mut MOUSE_CURSOR: OnceCell<MouseCursor> = OnceCell::new();
