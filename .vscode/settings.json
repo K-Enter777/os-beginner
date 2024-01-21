@@ -7,4 +7,5 @@
 		"mikan-os/mikan-loader/Cargo.toml",
 		"mikan-os/kernel/Cargo.toml",
 	],
+	"terminal.integrated.cwd": "${workspaceFolder}/mikan-os",
 }
