@@ -8,4 +8,7 @@
 		"mikan-os/kernel/Cargo.toml",
 	],
 	"terminal.integrated.cwd": "${workspaceFolder}/mikan-os",
+	"rust-analyzer.diagnostics.disabled": [
+		"unresolved-proc-macro"
+	],
 }

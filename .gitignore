@@ -1,3 +1,6 @@
 /osbook/
 disk.img
 target/
+
+# Cargo.lock is unnecessary for lib
+mikan-os/custom-attribute/Cargo.lock
