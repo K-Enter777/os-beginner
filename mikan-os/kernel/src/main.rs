@@ -106,7 +106,8 @@ fn switch_ehci2xhci(xhc_dev: &Device) {
 
 static mut XHC: OnceCell<Controller> = OnceCell::new();
 
-extern "C" fn int_handler_xhci(_frame: *const InterruptFrame) {
+#[custom_attribute::interrupt]
+fn int_handler_xhci(_frame: &InterruptFrame) {
     let xhc = unsafe { XHC.get_mut() }.unwrap();
     while xhc.primary_event_ring().has_front() {
         let err = xhc.process_event();
@@ -241,7 +242,7 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
     unsafe {
         IDT[InterruptVector::XHCI as usize].set_idt_entry(
             InterruptDescriptorAttribute::new(interrupt::DescriptorType::InterruptGate, 0, true),
-            int_handler_xhci as *const fn(*const InterruptFrame) as u64,
+            int_handler_xhci as *const fn() as u64,
             cs,
         );
         load_idt(
