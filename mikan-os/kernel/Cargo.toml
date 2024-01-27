@@ -3,6 +3,9 @@ name = "kernel"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+not-check = []
+
 [[bin]]
 name = "kernel"
 test = false
