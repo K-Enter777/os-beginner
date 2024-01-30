@@ -5,40 +5,6 @@ use core::{
 
 use crate::error;
 
-#[repr(C)]
-pub(crate) struct Controller {
-    mmio_base: c_ulong,
-    cap: *const (),
-    op: *const (),
-    max_ports: c_uchar,
-    devmgr: DeviceManager,
-    cr: Ring,
-    er: EventRing,
-}
-
-#[repr(C)]
-pub(crate) struct DeviceManager {
-    device_context_pointers: *mut *mut (), // 本当は DeviceContext**
-    max_slots: c_ulong,
-}
-
-#[repr(C)]
-pub(crate) struct Ring {
-    buf: *mut (), // 本当は *TRB
-    buf_size: c_ulong,
-    cycle_bit: bool,
-    write_index: c_ulong,
-}
-
-#[repr(C)]
-pub(crate) struct EventRing {
-    buf: *mut (), // 本当は TRB*
-    buf_size: c_ulong,
-    cycle_bit: bool,
-    erst: *mut (),        // 本当は EventRingSegmentTableEntry*
-    interrupter: *mut (), // 本当は InterrupterRegisterSet*
-}
-
 extern "C" {
     #[link_name = "_ZN3usb4xhci10ControllerC2Em"]
     fn contoller(this: *mut Controller, mmio_base: c_ulong);
@@ -52,6 +18,9 @@ extern "C" {
     #[link_name = "_ZN3usb4xhci10Controller6PortAtEh"]
     fn controller_port_at(this: *mut Controller, port_num: c_uchar) -> Port;
 
+    #[link_name = "_ZN3usb4xhci10Controller16PrimaryEventRingEv"]
+    fn controller_primay_event_ring(this: *mut Controller) -> *mut EventRing;
+
     #[link_name = "_ZN3usb4xhci13ConfigurePortERNS0_10ControllerERNS0_4PortE"]
     fn xhci_configure_port(xhc: *mut Controller, port: *mut Port) -> CxxError;
 
@@ -63,6 +32,20 @@ extern "C" {
 
     #[link_name = "_ZNK3usb4xhci4Port11IsConnectedEv"]
     fn port_is_connected(this: *const Port) -> bool;
+
+    #[link_name = "_ZNK3usb4xhci9EventRing8HasFrontEv"]
+    fn event_ring_has_front(this: *const EventRing) -> bool;
+}
+
+#[repr(C)]
+pub(crate) struct Controller {
+    mmio_base: c_ulong,
+    cap: *const (),
+    op: *const (),
+    max_ports: c_uchar,
+    devmgr: DeviceManager,
+    cr: Ring,
+    er: EventRing,
 }
 
 impl Controller {
@@ -96,6 +79,43 @@ impl Controller {
 
     pub(crate) fn process_event(&mut self) -> error::Error {
         unsafe { xhci_process_event(self as *mut Self) }.into()
+    }
+
+    pub(crate) fn primary_event_ring(&mut self) -> &mut EventRing {
+        unsafe {
+            controller_primay_event_ring(self as *mut Self)
+                .as_mut()
+                .unwrap()
+        }
+    }
+}
+
+#[repr(C)]
+pub(crate) struct DeviceManager {
+    device_context_pointers: *mut *mut (), // 本当は DeviceContext**
+    max_slots: c_ulong,
+}
+
+#[repr(C)]
+pub(crate) struct Ring {
+    buf: *mut (), // 本当は *TRB
+    buf_size: c_ulong,
+    cycle_bit: bool,
+    write_index: c_ulong,
+}
+
+#[repr(C)]
+pub(crate) struct EventRing {
+    buf: *mut (), // 本当は TRB*
+    buf_size: c_ulong,
+    cycle_bit: bool,
+    erst: *mut (),        // 本当は EventRingSegmentTableEntry*
+    interrupter: *mut (), // 本当は InterrupterRegisterSet*
+}
+
+impl EventRing {
+    pub(crate) fn has_front(&self) -> bool {
+        unsafe { event_ring_has_front(self as *const Self) }
     }
 }
 

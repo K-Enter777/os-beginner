@@ -4,14 +4,13 @@ use core::{
     cell::RefCell,
     fmt::{self, Display, LowerHex},
     ptr::addr_of_mut,
-    sync::atomic::AtomicUsize,
 };
 
 use spin::Mutex;
 
 use crate::{
+    asmfunc::{io_in_32, io_out_32},
     error::{self, WithError},
-    io::{io_in_32, io_out_32},
     make_error,
 };
 
@@ -258,16 +257,24 @@ impl Device {
     ) -> error::Error {
         let mut msi_cap = self.read_msi_capability(cap_addr);
 
-        // なんか unpacked 構造体の参照は UB（未定義動作）らしい
+        // なんか packed 構造体の要素への参照は UB（未定義動作）らしい
         let header = addr_of_mut!(msi_cap.header);
         let enable = if unsafe { *header }.bits().multi_msg_capable() <= num_vector_exponent {
             unsafe { *header }.bits().multi_msg_capable()
         } else {
             num_vector_exponent
         };
-        unsafe { *header }.bits_mut().set_multi_msg_enable(enable);
 
-        unsafe { *header }.bits_mut().set_msi_enable(1);
+        // packed 構造体の参照を生ポインタから使おうとしても、それも UB っぽい
+        // 挙動を見る限りはコピーが起きている（ポインタを見てもそうなっている）
+        // そのため、できることは生ポインタに対して直接 `write_unaligned()` といメソッドで
+        // 値を上書きすることだけ
+        // （中身は `memcpy` で 1 バイトずつコピーしているっぽい）
+        let mut old = unsafe { *header };
+        old.bits_mut().set_multi_msg_enable(enable);
+        old.bits_mut().set_msi_enable(1);
+        unsafe { header.write_unaligned(old) };
+
         msi_cap.msg_addr = msg_addr;
         msi_cap.msg_data = msg_data;
 
@@ -283,6 +290,22 @@ impl Device {
         num_vector_exponent: u32,
     ) -> error::Error {
         make_error!(error::Code::NotImplemented)
+    }
+
+    pub(crate) fn configure_msi_fixed_destination(
+        &mut self,
+        apic_id: u8,
+        trigger_mode: MSITriggerMode,
+        delivery_mode: MSIDeliverMode,
+        vector: u8,
+        num_vector_exponent: u32,
+    ) -> error::Error {
+        let msg_addr = 0xfee0_0000 | ((apic_id as u32) << 12);
+        let mut msg_data = ((delivery_mode as u32) << 8) | vector as u32;
+        if trigger_mode == MSITriggerMode::Level {
+            msg_data |= 0xc000;
+        }
+        self.configure_msi(msg_addr, msg_data, num_vector_exponent)
     }
 }
 
@@ -513,12 +536,13 @@ pub(crate) struct MSICapability {
     pending_bits: u32,
 }
 
-enum MSITriggerMode {
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum MSITriggerMode {
     Edge = 0,
     Level = 1,
 }
 
-enum MSIDeliverMode {
+pub(crate) enum MSIDeliverMode {
     Fixed = 0b000,
     LowestPriority = 0b001,
     SMI = 0b010,

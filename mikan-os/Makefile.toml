@@ -20,7 +20,7 @@ script = '''
 #!/bin/bash
 
 cd kernel
-cargo build --release
+cargo build --release --features=not-check
 '''
 
 [tasks.build]
@@ -88,7 +88,7 @@ cargo build
 [tasks.debug-build-kernel]
 script = '''
 cd kernel
-cargo build
+cargo build --features=not-check
 '''
 
 [tasks.usb]

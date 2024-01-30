@@ -1,32 +1,38 @@
 #![no_std]
 #![no_main]
 
+mod asmfunc;
 mod console;
 mod error;
 mod font;
 mod font_data;
 mod frame_buffer_config;
 mod graphics;
-mod io;
+mod interrupt;
 mod logger;
 mod mouse;
 mod pci;
 mod placement;
+mod queue;
 mod string;
 mod usb;
 
 use console::Console;
-use core::{arch::asm, cell::OnceCell, fmt::Write, mem::size_of, panic::PanicInfo};
+use core::{arch::asm, cell::OnceCell, mem::size_of, panic::PanicInfo};
 use frame_buffer_config::{FrameBufferConfig, PixelFormat};
 use graphics::{
     BgrResv8BitPerColorPixelWriter, PixelColor, PixelWriter, RgbResv8BitPerColorPixelWriter,
     Vector2D,
 };
+use interrupt::{notify_end_of_interrupt, InterruptFrame, Message};
 use mouse::MouseCursor;
 use pci::Device;
 use placement::new_mut_with_buf;
+use queue::ArrayQueue;
 
 use crate::{
+    asmfunc::{get_cs, load_idt},
+    interrupt::{InterruptDescriptor, InterruptDescriptorAttribute, InterruptVector, MessageType},
     logger::{set_log_level, LogLevel},
     usb::{Controller, HIDMouseDriver},
 };
@@ -40,11 +46,14 @@ const PIXEL_WRITER_SIZE: usize = size_of::<RgbResv8BitPerColorPixelWriter>();
 static mut PIXEL_WRITER_BUF: [u8; PIXEL_WRITER_SIZE] = [0u8; PIXEL_WRITER_SIZE];
 static mut CONSOLE: OnceCell<Console> = OnceCell::new();
 
+static mut IDT: [InterruptDescriptor; 256] = [InterruptDescriptor::const_default(); 256];
+
 #[macro_export]
 macro_rules! printk {
     ($($arg:tt)*) => {
         unsafe {
-            match CONSOLE.get_mut() {
+            use core::fmt::Write;
+            match $crate::CONSOLE.get_mut() {
                 Some(console) => write!(console, $($arg)*).unwrap(),
                 None => $crate::halt(),
             }
@@ -54,8 +63,8 @@ macro_rules! printk {
 
 #[macro_export]
 macro_rules! printkln {
-    () => (printk!("\n"));
-    ($($arg:tt)*) => (printk!("{}\n", format_args!($($arg)*)));
+    () => ($crate::printk!("\n"));
+    ($($arg:tt)*) => ($crate::printk!("{}\n", format_args!($($arg)*)));
 }
 
 static mut MOUSE_CURSOR: OnceCell<MouseCursor> = OnceCell::new();
@@ -95,6 +104,19 @@ fn switch_ehci2xhci(xhc_dev: &Device) {
         superspeed_ports,
         ehci2xhci_ports
     );
+}
+
+static mut XHC: OnceCell<Controller> = OnceCell::new();
+
+const MAIN_QUEUE_BUF_SIZE: usize = size_of::<Message>() * 32;
+static mut MAIN_QUEUE_BUF: [u8; MAIN_QUEUE_BUF_SIZE] = [0; MAIN_QUEUE_BUF_SIZE];
+static mut MAIN_QUEUE: OnceCell<ArrayQueue<Message>> = OnceCell::new();
+
+#[custom_attribute::interrupt]
+fn int_handler_xhci(_frame: &InterruptFrame) {
+    let main_queue = unsafe { MAIN_QUEUE.get_mut() }.unwrap();
+    main_queue.push(Message::new(MessageType::InteruptXHCI));
+    notify_end_of_interrupt();
 }
 
 #[no_mangle]
@@ -168,6 +190,9 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
         });
     }
 
+    // 割り込みキューの初期化
+    unsafe { MAIN_QUEUE.get_or_init(|| ArrayQueue::new(&mut MAIN_QUEUE_BUF)) };
+
     // デバイス一覧の表示
     let err = pci::scan_all_bus();
     log!(LogLevel::Debug, "scan_all_bus: {}", err);
@@ -179,7 +204,7 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
         let num_devices = *pci::NUM_DEVICES.lock().borrow();
         for i in 0..num_devices {
             let dev = devices[i].unwrap();
-            let vendor_id = pci::read_vendor_id(dev.bus(), dev.device(), dev.function());
+            let vendor_id = dev.read_vendor_id();
             let class_code = pci::read_class_code(dev.bus(), dev.device(), dev.function());
             log!(
                 LogLevel::Debug,
@@ -204,20 +229,41 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
             }
         }
 
-        if xhc_dev.is_none() {
-            log!(LogLevel::Error, "There is no xHC devices.");
-            halt();
+        if xhc_dev.is_some() {
+            let xhc_dev = xhc_dev.unwrap();
+            log!(
+                LogLevel::Info,
+                "xHC has been found: {}.{}.{}",
+                xhc_dev.bus(),
+                xhc_dev.device(),
+                xhc_dev.function()
+            );
         }
     }
+    let mut xhc_dev = xhc_dev.unwrap();
 
-    let xhc_dev = xhc_dev.unwrap();
-    log!(
-        LogLevel::Info,
-        "xHC has been found: {}.{}.{}",
-        xhc_dev.bus(),
-        xhc_dev.device(),
-        xhc_dev.function()
+    let cs = unsafe { get_cs() };
+    unsafe {
+        IDT[InterruptVector::XHCI as usize].set_idt_entry(
+            InterruptDescriptorAttribute::new(interrupt::DescriptorType::InterruptGate, 0, true),
+            int_handler_xhci as *const fn() as u64,
+            cs,
+        );
+        load_idt(
+            (size_of::<InterruptDescriptor>() * IDT.len()) as u16 - 1,
+            IDT.as_ptr() as u64,
+        )
+    }
+
+    let bsp_local_apic_id = (unsafe { *(0xfee0_0020 as *const u32) } >> 24) as u8;
+    xhc_dev.configure_msi_fixed_destination(
+        bsp_local_apic_id,
+        pci::MSITriggerMode::Level,
+        pci::MSIDeliverMode::Fixed,
+        InterruptVector::XHCI as u8,
+        0,
     );
+    let xhc_dev = xhc_dev;
 
     // xHC の BAR から情報を得る
     let xhc_bar = xhc_dev.read_bar(0);
@@ -238,38 +284,67 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
     log!(LogLevel::Info, "xHC starting");
     xhc.run();
 
+    unsafe {
+        XHC.get_or_init(|| xhc);
+    }
+
     HIDMouseDriver::set_default_observer(mouse_observer);
 
-    for i in 1..=xhc.max_ports() {
-        let mut port = xhc.port_at(i);
-        log!(
-            LogLevel::Debug,
-            "Port {}: IsConnected={}",
-            i,
-            port.is_connected()
-        );
+    {
+        let xhc = unsafe { XHC.get_mut() }.unwrap();
 
-        if port.is_connected() {
-            let err = xhc.configure_port(&mut port);
-            if (&err).into() {
-                log!(LogLevel::Error, "failed to configure port: {}", err);
-                continue;
+        for i in 1..=xhc.max_ports() {
+            let mut port = xhc.port_at(i);
+            log!(
+                LogLevel::Debug,
+                "Port {}: IsConnected={}",
+                i,
+                port.is_connected()
+            );
+
+            if port.is_connected() {
+                let err = xhc.configure_port(&mut port);
+                if (&err).into() {
+                    log!(LogLevel::Error, "failed to configure port: {}", err);
+                    continue;
+                }
             }
         }
     }
 
     loop {
-        let err = xhc.process_event();
-        if (&err).into() {
-            log!(LogLevel::Error, "Error while process_event: {}", err);
+        unsafe { asm!("cli") };
+        let main_queue = unsafe { MAIN_QUEUE.get_mut() }.unwrap();
+
+        if main_queue.len() == 0 {
+            unsafe {
+                asm!("sti");
+                asm!("hlt");
+            }
+            continue;
+        }
+
+        let msg = *main_queue.front().unwrap();
+        main_queue.pop();
+        unsafe { asm!("sti") };
+
+        match msg.r#type() {
+            MessageType::InteruptXHCI => {
+                let xhc = unsafe { XHC.get_mut() }.unwrap();
+                while xhc.primary_event_ring().has_front() {
+                    let err = xhc.process_event();
+                    if (&err).into() {
+                        log!(LogLevel::Error, "Error while process_evnet: {}", err);
+                    }
+                }
+            }
         }
     }
-
-    halt();
 }
 
 #[panic_handler]
-fn panic(_: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
+    printkln!("{}", info);
     halt()
 }
 
