@@ -10,6 +10,7 @@ mod frame_buffer_config;
 mod graphics;
 mod interrupt;
 mod logger;
+mod memory_map;
 mod mouse;
 mod pci;
 mod placement;
@@ -29,7 +30,7 @@ use mouse::MouseCursor;
 use pci::Device;
 use placement::new_mut_with_buf;
 use queue::ArrayQueue;
-use uefi::table::boot::{MemoryMap, MemoryType};
+use uefi::table::boot::{MemoryDescriptor, MemoryMap, MemoryType};
 
 use crate::{
     asmfunc::{get_cs, load_idt},
@@ -37,6 +38,22 @@ use crate::{
     logger::{set_log_level, LogLevel},
     usb::{Controller, HIDMouseDriver},
 };
+
+/// カーネル用スタック
+#[repr(align(16))]
+struct KernelStack {
+    _buf: [u8; 1024 * 1024],
+}
+impl KernelStack {
+    const fn new() -> Self {
+        Self {
+            _buf: [0; 1024 * 1024],
+        }
+    }
+}
+#[allow(unused)]
+#[no_mangle]
+static KERNEL_MAIN_STACK: KernelStack = KernelStack::new();
 
 /// デスクトップ背景の色
 const DESKTOP_BG_COLOR: PixelColor = PixelColor::new(45, 118, 237);
@@ -121,7 +138,22 @@ fn int_handler_xhci(_frame: &InterruptFrame) {
 }
 
 #[no_mangle]
-pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig, memory_map: MemoryMap) {
+// この呼び出しの前にスタック領域を変更するため、でかい構造体をそのまま渡せなくなる
+// それを避けるために参照で渡す
+pub extern "sysv64" fn kernel_main_new_stack(
+    frame_buffer_config: &'static FrameBufferConfig,
+    memory_map_ref: &'static MemoryMap,
+) {
+    // 参照元は今後使用される可能性のあるメモリ領域にあるため、コピーしておく
+    let frame_buffer_config = frame_buffer_config.clone();
+
+    // [MemoryMap] はコピーできないため、[MemoryDescriptor] を全て見て、
+    // それをコピーしていく
+    let mut memory_map = [Option::<MemoryDescriptor>::None; 256];
+    for (index, desc) in memory_map_ref.entries().enumerate() {
+        memory_map[index] = Some(*desc);
+    }
+
     let pixel_writer: &mut dyn PixelWriter = match frame_buffer_config.pixel_format {
         PixelFormat::Rgb => {
             match unsafe {
@@ -184,25 +216,22 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig, memo
     printk!("Welcome to MikanOS!\n");
     set_log_level(LogLevel::Warn);
 
-    let available_memory_types = [
-        MemoryType::BOOT_SERVICES_CODE,
-        MemoryType::BOOT_SERVICES_DATA,
-        MemoryType::CONVENTIONAL,
-    ];
+    // メモリの使用可能領域を表示
+    for desc in memory_map {
+        if desc.is_none() {
+            break;
+        }
 
-    printkln!("memory_map: {:p}", &memory_map);
-    for desc in memory_map.entries() {
-        for mem_ty in available_memory_types {
-            if desc.ty == mem_ty {
-                printkln!(
-                    "type = {}, phys = {:08x} - {:08x}, pages = {}, attr = {:08x}",
-                    desc.ty.0,
-                    desc.phys_start,
-                    desc.phys_start + desc.page_count * 4096 - 1,
-                    desc.page_count,
-                    desc.att
-                );
-            }
+        let desc = desc.unwrap();
+        if memory_map::is_available(desc.ty) {
+            printkln!(
+                "type = {}, phys = {:08x} - {:08x}, pages = {}, attr = {:08x}",
+                desc.ty.0,
+                desc.phys_start,
+                desc.phys_start + desc.page_count * 4096 - 1,
+                desc.page_count,
+                desc.att
+            );
         }
     }
 
@@ -341,8 +370,7 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig, memo
 
         if main_queue.len() == 0 {
             unsafe {
-                asm!("sti");
-                asm!("hlt");
+                asm!("sti", "hlt");
             }
             continue;
         }

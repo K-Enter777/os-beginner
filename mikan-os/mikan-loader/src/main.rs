@@ -507,9 +507,9 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
 
     // カーネルの呼び出し
     // ELF ファイルの 24 byte 目から 64 bit でエントリーポイントの番地が書いてある
-    let entry_point: extern "sysv64" fn(FrameBufferConfig, MemoryMap) =
+    let entry_point: extern "sysv64" fn(&FrameBufferConfig, &MemoryMap) =
         unsafe { transmute(kernel_ehdr.entry) };
-    entry_point(config, memmap);
+    entry_point(&config, &memmap);
 
     halt()
 }
