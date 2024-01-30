@@ -29,6 +29,7 @@ use mouse::MouseCursor;
 use pci::Device;
 use placement::new_mut_with_buf;
 use queue::ArrayQueue;
+use uefi::table::boot::{MemoryMap, MemoryType};
 
 use crate::{
     asmfunc::{get_cs, load_idt},
@@ -120,7 +121,7 @@ fn int_handler_xhci(_frame: &InterruptFrame) {
 }
 
 #[no_mangle]
-pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
+pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig, memory_map: MemoryMap) {
     let pixel_writer: &mut dyn PixelWriter = match frame_buffer_config.pixel_format {
         PixelFormat::Rgb => {
             match unsafe {
@@ -182,6 +183,28 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
     // welcome 文
     printk!("Welcome to MikanOS!\n");
     set_log_level(LogLevel::Warn);
+
+    let available_memory_types = [
+        MemoryType::BOOT_SERVICES_CODE,
+        MemoryType::BOOT_SERVICES_DATA,
+        MemoryType::CONVENTIONAL,
+    ];
+
+    printkln!("memory_map: {:p}", &memory_map);
+    for desc in memory_map.entries() {
+        for mem_ty in available_memory_types {
+            if desc.ty == mem_ty {
+                printkln!(
+                    "type = {}, phys = {:08x} - {:08x}, pages = {}, attr = {:08x}",
+                    desc.ty.0,
+                    desc.phys_start,
+                    desc.phys_start + desc.page_count * 4096 - 1,
+                    desc.page_count,
+                    desc.att
+                );
+            }
+        }
+    }
 
     // マウスカーソルの生成
     unsafe {
