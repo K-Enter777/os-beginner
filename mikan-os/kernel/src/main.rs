@@ -13,6 +13,7 @@ mod logger;
 mod mouse;
 mod pci;
 mod placement;
+mod queue;
 mod string;
 mod usb;
 
@@ -23,14 +24,15 @@ use graphics::{
     BgrResv8BitPerColorPixelWriter, PixelColor, PixelWriter, RgbResv8BitPerColorPixelWriter,
     Vector2D,
 };
-use interrupt::{notify_end_of_interrupt, InterruptFrame};
+use interrupt::{notify_end_of_interrupt, InterruptFrame, Message};
 use mouse::MouseCursor;
 use pci::Device;
 use placement::new_mut_with_buf;
+use queue::ArrayQueue;
 
 use crate::{
     asmfunc::{get_cs, load_idt},
-    interrupt::{InterruptDescriptor, InterruptDescriptorAttribute, InterruptVector},
+    interrupt::{InterruptDescriptor, InterruptDescriptorAttribute, InterruptVector, MessageType},
     logger::{set_log_level, LogLevel},
     usb::{Controller, HIDMouseDriver},
 };
@@ -106,15 +108,14 @@ fn switch_ehci2xhci(xhc_dev: &Device) {
 
 static mut XHC: OnceCell<Controller> = OnceCell::new();
 
+const MAIN_QUEUE_BUF_SIZE: usize = size_of::<Message>() * 32;
+static mut MAIN_QUEUE_BUF: [u8; MAIN_QUEUE_BUF_SIZE] = [0; MAIN_QUEUE_BUF_SIZE];
+static mut MAIN_QUEUE: OnceCell<ArrayQueue<Message>> = OnceCell::new();
+
 #[custom_attribute::interrupt]
 fn int_handler_xhci(_frame: &InterruptFrame) {
-    let xhc = unsafe { XHC.get_mut() }.unwrap();
-    while xhc.primary_event_ring().has_front() {
-        let err = xhc.process_event();
-        if (&err).into() {
-            log!(LogLevel::Error, "Error while ProcessEvent: {}", err);
-        }
-    }
+    let main_queue = unsafe { MAIN_QUEUE.get_mut() }.unwrap();
+    main_queue.push(Message::new(MessageType::InteruptXHCI));
     notify_end_of_interrupt();
 }
 
@@ -188,6 +189,9 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
             MouseCursor::new(pixel_writer, DESKTOP_BG_COLOR, Vector2D::new(300, 200))
         });
     }
+
+    // 割り込みキューの初期化
+    unsafe { MAIN_QUEUE.get_or_init(|| ArrayQueue::new(&mut MAIN_QUEUE_BUF)) };
 
     // デバイス一覧の表示
     let err = pci::scan_all_bus();
@@ -283,7 +287,6 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
     unsafe {
         XHC.get_or_init(|| xhc);
     }
-    unsafe { asm!("sti") };
 
     HIDMouseDriver::set_default_observer(mouse_observer);
 
@@ -309,12 +312,39 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
         }
     }
 
-    halt();
+    loop {
+        unsafe { asm!("cli") };
+        let main_queue = unsafe { MAIN_QUEUE.get_mut() }.unwrap();
+
+        if main_queue.len() == 0 {
+            unsafe {
+                asm!("sti");
+                asm!("hlt");
+            }
+            continue;
+        }
+
+        let msg = *main_queue.front().unwrap();
+        main_queue.pop();
+        unsafe { asm!("sti") };
+
+        match msg.r#type() {
+            MessageType::InteruptXHCI => {
+                let xhc = unsafe { XHC.get_mut() }.unwrap();
+                while xhc.primary_event_ring().has_front() {
+                    let err = xhc.process_event();
+                    if (&err).into() {
+                        log!(LogLevel::Error, "Error while process_evnet: {}", err);
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    printkln!("panic at {}", info.location().unwrap());
+    printkln!("{}", info);
     halt()
 }
 

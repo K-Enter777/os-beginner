@@ -148,3 +148,24 @@ pub(crate) struct InterruptFrame {
     rsp: u64,
     ss: u64,
 }
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[repr(u32)]
+pub(crate) enum MessageType {
+    InteruptXHCI,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct Message {
+    r#type: MessageType,
+}
+
+impl Message {
+    pub(crate) fn new(r#type: MessageType) -> Self {
+        Self { r#type }
+    }
+
+    pub(crate) fn r#type(&self) -> MessageType {
+        self.r#type
+    }
+}
