@@ -10,6 +10,7 @@ use spin::Mutex;
 
 use crate::{
     asmfunc::{io_in_32, io_out_32},
+    bitfield::BitField,
     error::{self, WithError},
     make_error,
 };
@@ -492,15 +493,15 @@ impl MSICapabilityHeaderBits {
     }
 
     pub(crate) fn set_multi_msg_enable(&mut self, value: u32) {
-        self.etc_1 = (self.etc_1 & !0x70) | (((value as u8) & 0x07) << 4);
+        self.etc_1.set_bits(4..7, value as u8);
     }
 
     pub(crate) fn addr_64_capable(&self) -> u32 {
-        ((self.etc_1 >> 7) & 0x01) as u32
+        self.etc_1.get_bit(7).into()
     }
 
     pub(crate) fn per_vector_mask_capable(&self) -> u32 {
-        (self.etc_2 & 0x01) as u32
+        self.etc_2.get_bit(0).into()
     }
 }
 
@@ -590,7 +591,7 @@ fn scan_function(bus: u8, device: u8, function: u8) -> error::Error {
     // PCI-PCI ブリッジの場合
     if class_code.match_base_sub(0x06, 0x04) {
         let bus_number = read_bus_numbers(bus, device, function);
-        let secondary_bus = (bus_number >> 8) & 0xff;
+        let secondary_bus = bus_number.get_bits(8..16);
         return scan_bus(secondary_bus as u8);
     }
 
