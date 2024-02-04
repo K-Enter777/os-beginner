@@ -33,6 +33,8 @@ pub(crate) union InterruptDescriptorAttribute {
 }
 
 impl InterruptDescriptorAttribute {
+    #![allow(unused)]
+
     pub(crate) const fn const_default() -> Self {
         Self { data: 0 }
     }
@@ -70,6 +72,7 @@ struct InterruptDescriptorAttributeBits {
 }
 
 impl InterruptDescriptorAttributeBits {
+    #![allow(unused)]
     const fn new(r#type: DescriptorType, descriptor_privilege_level: u8, present: bool) -> Self {
         let etc_2 =
             (if present { 1 } else { 0 } << 7) | (descriptor_privilege_level << 5) | r#type as u8;
@@ -147,6 +150,30 @@ pub(crate) struct InterruptFrame {
     rflags: u64,
     rsp: u64,
     ss: u64,
+}
+
+impl InterruptFrame {
+    #![allow(unused)]
+
+    pub(crate) fn rip(&self) -> u64 {
+        self.rip
+    }
+
+    pub(crate) fn cs(&self) -> u64 {
+        self.cs
+    }
+
+    pub(crate) fn rflags(&self) -> u64 {
+        self.rflags
+    }
+
+    pub(crate) fn rsp(&self) -> u64 {
+        self.rsp
+    }
+
+    pub(crate) fn ss(&self) -> u64 {
+        self.ss
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

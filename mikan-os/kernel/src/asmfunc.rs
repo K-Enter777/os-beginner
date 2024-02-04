@@ -5,6 +5,9 @@ extern "C" {
     pub(crate) fn io_in_32(addr: u16) -> u32;
     pub(crate) fn get_cs() -> u16;
     pub(crate) fn load_idt(limit: u16, offset: u64);
+    pub(crate) fn load_gdt(limit: u16, offset: u64);
+    pub(crate) fn set_ds_all(value: u16);
+    pub(crate) fn set_cs_ss(cs: u16, ss: u16);
 }
 
 global_asm! { r#"
@@ -35,6 +38,40 @@ load_idt:
     mov [rsp], di
     mov [rsp + 2], rsi
     lidt [rsp]
+    mov rsp, rbp
+    pop rbp
+    ret
+
+.global load_gdt
+load_gdt:
+    push rbp
+    mov rbp, rsp
+    sub rsp, 10
+    mov [rsp], di # limit
+    mov [rsp + 2], rsi # offset
+    lgdt [rsp]
+    mov rsp, rbp
+    pop rbp
+    ret
+
+.global set_ds_all
+set_ds_all:
+    mov ds, di
+    mov es, di
+    mov fs, di
+    mov gs, di
+    ret
+
+.global set_cs_ss
+set_cs_ss:
+    push rbp
+    mov rbp, rsp
+    mov ss, si
+    lea rax, .next
+    push rdi    # CS
+    push rax    # RIP
+    retfq
+.next:
     mov rsp, rbp
     pop rbp
     ret

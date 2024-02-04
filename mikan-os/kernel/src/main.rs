@@ -2,6 +2,7 @@
 #![no_main]
 
 mod asmfunc;
+mod bitfield;
 mod console;
 mod error;
 mod font;
@@ -15,8 +16,10 @@ mod mouse;
 mod pci;
 mod placement;
 mod queue;
+mod segment;
 mod string;
 mod usb;
+mod x86_descriptor;
 
 use console::Console;
 use core::{arch::asm, cell::OnceCell, mem::size_of, panic::PanicInfo};
@@ -33,7 +36,7 @@ use queue::ArrayQueue;
 use uefi::table::boot::{MemoryDescriptor, MemoryMap, MemoryType};
 
 use crate::{
-    asmfunc::{get_cs, load_idt},
+    asmfunc::{get_cs, load_idt, set_cs_ss, set_ds_all},
     interrupt::{InterruptDescriptor, InterruptDescriptorAttribute, InterruptVector, MessageType},
     logger::{set_log_level, LogLevel},
     usb::{Controller, HIDMouseDriver},
@@ -215,6 +218,16 @@ pub extern "sysv64" fn kernel_main_new_stack(
     // welcome 文
     printk!("Welcome to MikanOS!\n");
     set_log_level(LogLevel::Warn);
+
+    // セグメントの設定
+    segment::setup_segments();
+
+    const KERNEL_CS: u16 = 1 << 3;
+    const KERNEL_SS: u16 = 2 << 3;
+    unsafe {
+        set_ds_all(0);
+        set_cs_ss(KERNEL_CS, KERNEL_SS);
+    }
 
     // メモリの使用可能領域を表示
     for desc in memory_map {
