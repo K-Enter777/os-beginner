@@ -13,6 +13,7 @@ mod interrupt;
 mod logger;
 mod memory_map;
 mod mouse;
+mod paging;
 mod pci;
 mod placement;
 mod queue;
@@ -228,6 +229,9 @@ pub extern "sysv64" fn kernel_main_new_stack(
         set_ds_all(0);
         set_cs_ss(KERNEL_CS, KERNEL_SS);
     }
+
+    // ページングの設定
+    paging::setup_indentity_page_table();
 
     // メモリの使用可能領域を表示
     for desc in memory_map {

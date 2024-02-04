@@ -8,6 +8,7 @@ extern "C" {
     pub(crate) fn load_gdt(limit: u16, offset: u64);
     pub(crate) fn set_ds_all(value: u16);
     pub(crate) fn set_cs_ss(cs: u16, ss: u16);
+    pub(crate) fn set_cr3(value: u64);
 }
 
 global_asm! { r#"
@@ -74,6 +75,11 @@ set_cs_ss:
 .next:
     mov rsp, rbp
     pop rbp
+    ret
+
+.global set_cr3
+set_cr3:
+    mov cr3, rdi
     ret
 "# }
 
