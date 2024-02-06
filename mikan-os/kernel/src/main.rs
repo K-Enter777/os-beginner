@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 mod asmfunc;
 mod bitfield;
 mod console;
@@ -11,6 +13,7 @@ mod frame_buffer_config;
 mod graphics;
 mod interrupt;
 mod logger;
+mod memory_manager;
 mod memory_map;
 mod mouse;
 mod paging;
@@ -34,7 +37,7 @@ use mouse::MouseCursor;
 use pci::Device;
 use placement::new_mut_with_buf;
 use queue::ArrayQueue;
-use uefi::table::boot::{MemoryDescriptor, MemoryMap, MemoryType};
+use uefi::table::boot::MemoryMap;
 
 use crate::{
     asmfunc::{get_cs, load_idt, set_cs_ss, set_ds_all},
@@ -146,17 +149,13 @@ fn int_handler_xhci(_frame: &InterruptFrame) {
 // それを避けるために参照で渡す
 pub extern "sysv64" fn kernel_main_new_stack(
     frame_buffer_config: &'static FrameBufferConfig,
-    memory_map_ref: &'static MemoryMap,
+    memory_map: &'static MemoryMap,
 ) {
     // 参照元は今後使用される可能性のあるメモリ領域にあるため、コピーしておく
     let frame_buffer_config = frame_buffer_config.clone();
 
-    // [MemoryMap] はコピーできないため、[MemoryDescriptor] を全て見て、
-    // それをコピーしていく
-    let mut memory_map = [Option::<MemoryDescriptor>::None; 256];
-    for (index, desc) in memory_map_ref.entries().enumerate() {
-        memory_map[index] = Some(*desc);
-    }
+    // メモリアロケータの初期化
+    memory_manager::GLOBAL.initialize(memory_map);
 
     let pixel_writer: &mut dyn PixelWriter = match frame_buffer_config.pixel_format {
         PixelFormat::Rgb => {
@@ -232,25 +231,6 @@ pub extern "sysv64" fn kernel_main_new_stack(
 
     // ページングの設定
     paging::setup_indentity_page_table();
-
-    // メモリの使用可能領域を表示
-    for desc in memory_map {
-        if desc.is_none() {
-            break;
-        }
-
-        let desc = desc.unwrap();
-        if memory_map::is_available(desc.ty) {
-            printkln!(
-                "type = {}, phys = {:08x} - {:08x}, pages = {}, attr = {:08x}",
-                desc.ty.0,
-                desc.phys_start,
-                desc.phys_start + desc.page_count * 4096 - 1,
-                desc.page_count,
-                desc.att
-            );
-        }
-    }
 
     // マウスカーソルの生成
     unsafe {
