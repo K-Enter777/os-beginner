@@ -1,7 +1,10 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 mod asmfunc;
+mod bitfield;
 mod console;
 mod error;
 mod font;
@@ -10,13 +13,19 @@ mod frame_buffer_config;
 mod graphics;
 mod interrupt;
 mod logger;
+mod memory_manager;
+mod memory_map;
 mod mouse;
+mod paging;
 mod pci;
 mod placement;
 mod queue;
+mod segment;
 mod string;
 mod usb;
+mod x86_descriptor;
 
+use alloc::vec::Vec;
 use console::Console;
 use core::{arch::asm, cell::OnceCell, mem::size_of, panic::PanicInfo};
 use frame_buffer_config::{FrameBufferConfig, PixelFormat};
@@ -29,13 +38,30 @@ use mouse::MouseCursor;
 use pci::Device;
 use placement::new_mut_with_buf;
 use queue::ArrayQueue;
+use uefi::table::boot::MemoryMap;
 
 use crate::{
-    asmfunc::{get_cs, load_idt},
+    asmfunc::{get_cs, load_idt, set_cs_ss, set_ds_all},
     interrupt::{InterruptDescriptor, InterruptDescriptorAttribute, InterruptVector, MessageType},
     logger::{set_log_level, LogLevel},
     usb::{Controller, HIDMouseDriver},
 };
+
+/// カーネル用スタック
+#[repr(align(16))]
+struct KernelStack {
+    _buf: [u8; 1024 * 1024],
+}
+impl KernelStack {
+    const fn new() -> Self {
+        Self {
+            _buf: [0; 1024 * 1024],
+        }
+    }
+}
+#[allow(unused)]
+#[no_mangle]
+static KERNEL_MAIN_STACK: KernelStack = KernelStack::new();
 
 /// デスクトップ背景の色
 const DESKTOP_BG_COLOR: PixelColor = PixelColor::new(45, 118, 237);
@@ -120,7 +146,18 @@ fn int_handler_xhci(_frame: &InterruptFrame) {
 }
 
 #[no_mangle]
-pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
+// この呼び出しの前にスタック領域を変更するため、でかい構造体をそのまま渡せなくなる
+// それを避けるために参照で渡す
+pub extern "sysv64" fn kernel_main_new_stack(
+    frame_buffer_config: &'static FrameBufferConfig,
+    memory_map: &'static MemoryMap,
+) {
+    // 参照元は今後使用される可能性のあるメモリ領域にあるため、コピーしておく
+    let frame_buffer_config = frame_buffer_config.clone();
+
+    // メモリアロケータの初期化
+    memory_manager::GLOBAL.initialize(memory_map);
+
     let pixel_writer: &mut dyn PixelWriter = match frame_buffer_config.pixel_format {
         PixelFormat::Rgb => {
             match unsafe {
@@ -182,6 +219,19 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
     // welcome 文
     printk!("Welcome to MikanOS!\n");
     set_log_level(LogLevel::Warn);
+
+    // セグメントの設定
+    segment::setup_segments();
+
+    const KERNEL_CS: u16 = 1 << 3;
+    const KERNEL_SS: u16 = 2 << 3;
+    unsafe {
+        set_ds_all(0);
+        set_cs_ss(KERNEL_CS, KERNEL_SS);
+    }
+
+    // ページングの設定
+    paging::setup_indentity_page_table();
 
     // マウスカーソルの生成
     unsafe {
@@ -318,8 +368,7 @@ pub extern "sysv64" fn kernel_entry(frame_buffer_config: FrameBufferConfig) {
 
         if main_queue.len() == 0 {
             unsafe {
-                asm!("sti");
-                asm!("hlt");
+                asm!("sti", "hlt");
             }
             continue;
         }

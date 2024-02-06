@@ -15,6 +15,8 @@ pub(crate) struct ArrayQueue<'a, T> {
 }
 
 impl<'a, T> ArrayQueue<'a, T> {
+    #![allow(unused)]
+
     pub(crate) fn new(buf: &'a mut [u8]) -> Self {
         let capacity = buf.len() / size_of::<T>();
         let buf: &mut [T] = unsafe { transmute(buf) };

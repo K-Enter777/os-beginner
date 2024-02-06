@@ -23,6 +23,7 @@ panic = "abort"
 [dependencies]
 spin = "0.9.8"
 custom-attribute = { path = "../custom-attribute" }
+uefi = "0.26.0"
 
 [build-dependencies]
 cc = "1.0"
