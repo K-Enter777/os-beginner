@@ -25,6 +25,7 @@ mod string;
 mod usb;
 mod x86_descriptor;
 
+use alloc::vec::Vec;
 use console::Console;
 use core::{arch::asm, cell::OnceCell, mem::size_of, panic::PanicInfo};
 use frame_buffer_config::{FrameBufferConfig, PixelFormat};
@@ -231,6 +232,24 @@ pub extern "sysv64" fn kernel_main_new_stack(
 
     // ページングの設定
     paging::setup_indentity_page_table();
+
+    let mut descs = Vec::new();
+    for desc in memory_map.entries() {
+        descs.push(desc);
+    }
+    // メモリの使用可能領域を表示
+    for desc in descs {
+        if memory_map::is_available(desc.ty) {
+            printkln!(
+                "type = {}, phys = {:08x} - {:08x}, pages = {}, attr = {:08x}",
+                desc.ty.0,
+                desc.phys_start,
+                desc.phys_start + desc.page_count * 4096 - 1,
+                desc.page_count,
+                desc.att
+            );
+        }
+    }
 
     // マウスカーソルの生成
     unsafe {
