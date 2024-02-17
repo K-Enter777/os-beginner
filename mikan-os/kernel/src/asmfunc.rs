@@ -82,25 +82,3 @@ set_cr3:
     mov cr3, rdi
     ret
 "# }
-
-// 引数は System-V ABI では rdi, rsi に渡される
-// それらはこの関数内部でいじっていないので、引数はないものとしも問題ない
-extern "sysv64" {
-    #[allow(unused)]
-    pub fn kernel_entry();
-}
-
-// カーネルの本当のエントリーポイント
-// スタック領域の変更を行う
-// 何故か `KERNEL_MAIN_STACK + 1024 * 1024` が メモリアクセスにコンパイルされてしまうため、
-// `lea` 命令に変更してある
-global_asm! { r#"
-.global kernel_entry
-kernel_entry:
-    lea rsp, KERNEL_MAIN_STACK + 1024 * 1024
-    call kernel_main_new_stack
-.fin:
-    hlt
-    jmp .fin
-"#
-}

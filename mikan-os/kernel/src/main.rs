@@ -25,7 +25,6 @@ mod string;
 mod usb;
 mod x86_descriptor;
 
-use alloc::vec::Vec;
 use console::Console;
 use core::{arch::asm, cell::OnceCell, mem::size_of, panic::PanicInfo};
 use frame_buffer_config::{FrameBufferConfig, PixelFormat};
@@ -145,13 +144,10 @@ fn int_handler_xhci(_frame: &InterruptFrame) {
     notify_end_of_interrupt();
 }
 
-#[no_mangle]
 // この呼び出しの前にスタック領域を変更するため、でかい構造体をそのまま渡せなくなる
 // それを避けるために参照で渡す
-pub extern "sysv64" fn kernel_main_new_stack(
-    frame_buffer_config: &'static FrameBufferConfig,
-    memory_map: &'static MemoryMap,
-) {
+#[custom_attribute::kernel_entry(KERNEL_MAIN_STACK, 1024 * 1024)]
+fn kernel_entry(frame_buffer_config: &'static FrameBufferConfig, memory_map: &'static MemoryMap) {
     // 参照元は今後使用される可能性のあるメモリ領域にあるため、コピーしておく
     let frame_buffer_config = frame_buffer_config.clone();
 
