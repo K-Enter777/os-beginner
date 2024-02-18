@@ -5,28 +5,37 @@ use core::{
     ptr::copy_nonoverlapping,
 };
 
+use alloc::boxed::Box;
+
 use crate::{
     font::{write_ascii, write_string},
     graphics::{PixelColor, PixelWriter, Vector2D},
+    sync::OnceRwLock,
 };
 
 const ROW_NUM: usize = 25;
 const COLUMN_NUM: usize = 80;
 
-pub(crate) struct Console<'a> {
-    writer: &'a dyn PixelWriter,
-    fg_color: &'a PixelColor,
-    bg_color: &'a PixelColor,
+pub(crate) struct Console {
+    /// ピクセル描画用。
+    writer: &'static OnceRwLock<Box<dyn PixelWriter + Send>>,
+    /// 前面色。
+    fg_color: &'static PixelColor,
+    /// 背景色。
+    bg_color: &'static PixelColor,
+    /// 画面に描画する文字列を保持しておくバッファ。
     buffer: [[u8; COLUMN_NUM]; ROW_NUM],
+    /// 次に描画を行う行。
     cursor_row: usize,
+    /// 次に描画を行う列。
     cursor_column: usize,
 }
 
-impl<'a> Console<'a> {
+impl Console {
     pub(crate) fn new(
-        writer: &'a dyn PixelWriter,
-        fg_color: &'a PixelColor,
-        bg_color: &'a PixelColor,
+        writer: &'static OnceRwLock<Box<dyn PixelWriter + Send>>,
+        fg_color: &'static PixelColor,
+        bg_color: &'static PixelColor,
     ) -> Self {
         Self {
             writer,
@@ -44,7 +53,7 @@ impl<'a> Console<'a> {
                 self.new_line();
             } else if (self.cursor_column < COLUMN_NUM) {
                 write_ascii(
-                    self.writer,
+                    &mut **self.writer.write(),
                     Vector2D::new(8 * self.cursor_column as u32, 16 * self.cursor_row as u32),
                     c,
                     &self.fg_color,
@@ -65,6 +74,7 @@ impl<'a> Console<'a> {
             for y in 0..16 * ROW_NUM {
                 for x in 0..8 * COLUMN_NUM {
                     self.writer
+                        .write()
                         .write(Vector2D::new(x as u32, y as u32), &self.bg_color);
                 }
             }
@@ -79,7 +89,7 @@ impl<'a> Console<'a> {
                     );
                 }
                 write_string(
-                    self.writer,
+                    &mut **self.writer.write(),
                     Vector2D::new(0, 16 * row as u32),
                     &self.buffer[row],
                     &self.fg_color,
@@ -90,7 +100,7 @@ impl<'a> Console<'a> {
     }
 }
 
-impl<'a> Write for Console<'a> {
+impl Write for Console {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         if !s.is_ascii() {
             return Err(fmt::Error);
