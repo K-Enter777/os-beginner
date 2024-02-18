@@ -18,15 +18,16 @@ mod memory_map;
 mod mouse;
 mod paging;
 mod pci;
-mod placement;
 mod queue;
 mod segment;
 mod string;
+mod sync;
 mod usb;
 mod x86_descriptor;
 
+use alloc::{boxed::Box, collections::VecDeque};
 use console::Console;
-use core::{arch::asm, cell::OnceCell, mem::size_of, panic::PanicInfo};
+use core::{arch::asm, mem::size_of, panic::PanicInfo};
 use frame_buffer_config::{FrameBufferConfig, PixelFormat};
 use graphics::{
     BgrResv8BitPerColorPixelWriter, PixelColor, PixelWriter, RgbResv8BitPerColorPixelWriter,
@@ -35,8 +36,7 @@ use graphics::{
 use interrupt::{notify_end_of_interrupt, InterruptFrame, Message};
 use mouse::MouseCursor;
 use pci::Device;
-use placement::new_mut_with_buf;
-use queue::ArrayQueue;
+use sync::{OnceRwLock, RwLock};
 use uefi::table::boot::MemoryMap;
 
 use crate::{
@@ -62,27 +62,25 @@ impl KernelStack {
 #[no_mangle]
 static KERNEL_MAIN_STACK: KernelStack = KernelStack::new();
 
+/// ピクセル描画を担う。
+static PIXEL_WRITER: OnceRwLock<Box<dyn PixelWriter + Send>> = OnceRwLock::new();
+
 /// デスクトップ背景の色
 const DESKTOP_BG_COLOR: PixelColor = PixelColor::new(45, 118, 237);
 /// デスクトップ前景の色
 const DESKTOP_FG_COLOR: PixelColor = PixelColor::new(255, 255, 255);
 
-const PIXEL_WRITER_SIZE: usize = size_of::<RgbResv8BitPerColorPixelWriter>();
-static mut PIXEL_WRITER_BUF: [u8; PIXEL_WRITER_SIZE] = [0u8; PIXEL_WRITER_SIZE];
-static mut CONSOLE: OnceCell<Console> = OnceCell::new();
+/// コンソール処理を担う。
+static CONSOLE: OnceRwLock<Console> = OnceRwLock::new();
 
-static mut IDT: [InterruptDescriptor; 256] = [InterruptDescriptor::const_default(); 256];
+static IDT: RwLock<[InterruptDescriptor; 256]> =
+    RwLock::new([InterruptDescriptor::const_default(); 256]);
 
 #[macro_export]
 macro_rules! printk {
     ($($arg:tt)*) => {
-        unsafe {
-            use core::fmt::Write;
-            match $crate::CONSOLE.get_mut() {
-                Some(console) => write!(console, $($arg)*).unwrap(),
-                None => $crate::halt(),
-            }
-        }
+        use core::fmt::Write;
+        write!($crate::CONSOLE.write(), $($arg)*).unwrap();
     };
 }
 
@@ -92,25 +90,19 @@ macro_rules! printkln {
     ($($arg:tt)*) => ($crate::printk!("{}\n", format_args!($($arg)*)));
 }
 
-static mut MOUSE_CURSOR: OnceCell<MouseCursor> = OnceCell::new();
+static MOUSE_CURSOR: OnceRwLock<MouseCursor> = OnceRwLock::new();
 
 fn mouse_observer(displacement_x: i8, displacement_y: i8) {
-    let cursor = match unsafe { MOUSE_CURSOR.get_mut() } {
-        None => halt(),
-        Some(cursor) => cursor,
-    };
-    cursor.move_relative(Vector2D::new(displacement_x as u32, displacement_y as u32));
+    MOUSE_CURSOR
+        .write()
+        .move_relative(Vector2D::new(displacement_x as u32, displacement_y as u32));
 }
 
 fn switch_ehci2xhci(xhc_dev: &Device) {
     let mut intel_ehc_exist = false;
-    let num_device = *pci::NUM_DEVICES.lock().borrow();
-    let devices = pci::DEVICES.lock();
-    let devices = devices.borrow();
-    for i in 0..num_device {
-        if devices[i].unwrap().class_code().r#match(0x0c, 0x03, 0x20)
-            && devices[i].unwrap().read_vendor_id() == 0x8086
-        {
+    let devices = pci::DEVICES.read();
+    for device in &*devices {
+        if device.class_code().r#match(0x0c, 0x03, 0x20) && device.read_vendor_id() == 0x8086 {
             intel_ehc_exist = true;
             break;
         }
@@ -131,16 +123,15 @@ fn switch_ehci2xhci(xhc_dev: &Device) {
     );
 }
 
-static mut XHC: OnceCell<Controller> = OnceCell::new();
+static XHC: OnceRwLock<Controller> = OnceRwLock::new();
 
-const MAIN_QUEUE_BUF_SIZE: usize = size_of::<Message>() * 32;
-static mut MAIN_QUEUE_BUF: [u8; MAIN_QUEUE_BUF_SIZE] = [0; MAIN_QUEUE_BUF_SIZE];
-static mut MAIN_QUEUE: OnceCell<ArrayQueue<Message>> = OnceCell::new();
+static MAIN_QUEUE: RwLock<VecDeque<Message>> = RwLock::new(VecDeque::new());
 
 #[custom_attribute::interrupt]
 fn int_handler_xhci(_frame: &InterruptFrame) {
-    let main_queue = unsafe { MAIN_QUEUE.get_mut() }.unwrap();
-    main_queue.push(Message::new(MessageType::InteruptXHCI));
+    MAIN_QUEUE
+        .write()
+        .push_back(Message::new(MessageType::InteruptXHCI));
     notify_end_of_interrupt();
 }
 
@@ -154,63 +145,50 @@ fn kernel_entry(frame_buffer_config: &'static FrameBufferConfig, memory_map: &'s
     // メモリアロケータの初期化
     memory_manager::GLOBAL.initialize(memory_map);
 
-    let pixel_writer: &mut dyn PixelWriter = match frame_buffer_config.pixel_format {
-        PixelFormat::Rgb => {
-            match unsafe {
-                new_mut_with_buf(
-                    RgbResv8BitPerColorPixelWriter::new(frame_buffer_config),
-                    &mut PIXEL_WRITER_BUF,
-                )
-            } {
-                Err(_size) => halt(),
-                Ok(writer) => writer,
-            }
-        }
-        PixelFormat::Bgr => {
-            match unsafe {
-                new_mut_with_buf(
-                    BgrResv8BitPerColorPixelWriter::new(frame_buffer_config),
-                    &mut PIXEL_WRITER_BUF,
-                )
-            } {
-                Err(_size) => halt(),
-                Ok(writer) => writer,
-            }
-        }
+    let pixel_writer: Box<dyn PixelWriter + Send> = match frame_buffer_config.pixel_format {
+        PixelFormat::Rgb => Box::new(RgbResv8BitPerColorPixelWriter::new(frame_buffer_config)),
+
+        PixelFormat::Bgr => Box::new(BgrResv8BitPerColorPixelWriter::new(frame_buffer_config)),
     };
 
     let frame_width = pixel_writer.config().horizontal_resolution as u32;
     let frame_height = pixel_writer.config().vertical_resolution as u32;
 
-    // デスクトップ背景の描画
-    pixel_writer.fill_rectangle(
-        Vector2D::new(0, 0),
-        Vector2D::new(frame_width, frame_height - 50),
-        &DESKTOP_BG_COLOR,
-    );
-    // タスクバーの表示
-    pixel_writer.fill_rectangle(
-        Vector2D::new(0, frame_height - 50),
-        Vector2D::new(frame_width, 50),
-        &PixelColor::new(1, 8, 17),
-    );
-    // （多分）Windows の検索窓
-    pixel_writer.fill_rectangle(
-        Vector2D::new(0, frame_height - 50),
-        Vector2D::new(frame_width / 5, 50),
-        &PixelColor::new(80, 80, 80),
-    );
-    // （多分）Windows のスタートボタン
-    pixel_writer.fill_rectangle(
-        Vector2D::new(10, frame_height - 40),
-        Vector2D::new(30, 30),
-        &PixelColor::new(160, 160, 160),
-    );
+    PIXEL_WRITER.init(pixel_writer);
 
-    // コンソールの生成
-    unsafe {
-        CONSOLE.get_or_init(|| Console::new(pixel_writer, &DESKTOP_FG_COLOR, &DESKTOP_BG_COLOR));
+    {
+        let mut pixel_writer = PIXEL_WRITER.write();
+        // デスクトップ背景の描画
+        pixel_writer.fill_rectangle(
+            Vector2D::new(0, 0),
+            Vector2D::new(frame_width, frame_height - 50),
+            &DESKTOP_BG_COLOR,
+        );
+        // タスクバーの表示
+        pixel_writer.fill_rectangle(
+            Vector2D::new(0, frame_height - 50),
+            Vector2D::new(frame_width, 50),
+            &PixelColor::new(1, 8, 17),
+        );
+        // （多分）Windows の検索窓
+        pixel_writer.fill_rectangle(
+            Vector2D::new(0, frame_height - 50),
+            Vector2D::new(frame_width / 5, 50),
+            &PixelColor::new(80, 80, 80),
+        );
+        // （多分）Windows のスタートボタン
+        pixel_writer.fill_rectangle(
+            Vector2D::new(10, frame_height - 40),
+            Vector2D::new(30, 30),
+            &PixelColor::new(160, 160, 160),
+        );
     }
+    // コンソールの生成
+    CONSOLE.init(Console::new(
+        &PIXEL_WRITER,
+        &DESKTOP_FG_COLOR,
+        &DESKTOP_BG_COLOR,
+    ));
 
     // welcome 文
     printk!("Welcome to MikanOS!\n");
@@ -230,14 +208,11 @@ fn kernel_entry(frame_buffer_config: &'static FrameBufferConfig, memory_map: &'s
     paging::setup_indentity_page_table();
 
     // マウスカーソルの生成
-    unsafe {
-        MOUSE_CURSOR.get_or_init(|| {
-            MouseCursor::new(pixel_writer, DESKTOP_BG_COLOR, Vector2D::new(300, 200))
-        });
-    }
-
-    // 割り込みキューの初期化
-    unsafe { MAIN_QUEUE.get_or_init(|| ArrayQueue::new(&mut MAIN_QUEUE_BUF)) };
+    MOUSE_CURSOR.init(MouseCursor::new(
+        &PIXEL_WRITER,
+        DESKTOP_BG_COLOR,
+        Vector2D::new(300, 200),
+    ));
 
     // デバイス一覧の表示
     let err = pci::scan_all_bus();
@@ -245,11 +220,9 @@ fn kernel_entry(frame_buffer_config: &'static FrameBufferConfig, memory_map: &'s
 
     let mut xhc_dev = None;
     {
-        let devices = pci::DEVICES.lock();
-        let devices = devices.borrow();
-        let num_devices = *pci::NUM_DEVICES.lock().borrow();
-        for i in 0..num_devices {
-            let dev = devices[i].unwrap();
+        let devices = pci::DEVICES.read();
+        for device in &*devices {
+            let dev = device;
             let vendor_id = dev.read_vendor_id();
             let class_code = pci::read_class_code(dev.bus(), dev.device(), dev.function());
             log!(
@@ -265,9 +238,9 @@ fn kernel_entry(frame_buffer_config: &'static FrameBufferConfig, memory_map: &'s
         }
 
         // Intel 製を優先して xHC を探す
-        for i in 0..num_devices {
-            if devices[i].unwrap().class_code().r#match(0x0c, 0x03, 0x30) {
-                xhc_dev = devices[i];
+        for device in &*devices {
+            if device.class_code().r#match(0x0c, 0x03, 0x30) {
+                xhc_dev = Some(*device);
 
                 if 0x8086 == xhc_dev.unwrap().read_vendor_id() {
                     break;
@@ -289,16 +262,23 @@ fn kernel_entry(frame_buffer_config: &'static FrameBufferConfig, memory_map: &'s
     let mut xhc_dev = xhc_dev.unwrap();
 
     let cs = unsafe { get_cs() };
-    unsafe {
-        IDT[InterruptVector::XHCI as usize].set_idt_entry(
-            InterruptDescriptorAttribute::new(interrupt::DescriptorType::InterruptGate, 0, true),
+    {
+        let mut idt = IDT.write();
+        idt[InterruptVector::XHCI as usize].set_idt_entry(
+            InterruptDescriptorAttribute::new(
+                x86_descriptor::SystemSegmentType::InterruptGate,
+                0,
+                true,
+            ),
             int_handler_xhci as *const fn() as u64,
             cs,
         );
-        load_idt(
-            (size_of::<InterruptDescriptor>() * IDT.len()) as u16 - 1,
-            IDT.as_ptr() as u64,
-        )
+        unsafe {
+            load_idt(
+                (size_of::<InterruptDescriptor>() * idt.len()) as u16 - 1,
+                idt.as_ptr() as u64,
+            )
+        }
     }
 
     let bsp_local_apic_id = (unsafe { *(0xfee0_0020 as *const u32) } >> 24) as u8;
@@ -330,14 +310,12 @@ fn kernel_entry(frame_buffer_config: &'static FrameBufferConfig, memory_map: &'s
     log!(LogLevel::Info, "xHC starting");
     xhc.run();
 
-    unsafe {
-        XHC.get_or_init(|| xhc);
-    }
+    XHC.init(xhc);
 
     HIDMouseDriver::set_default_observer(mouse_observer);
 
     {
-        let xhc = unsafe { XHC.get_mut() }.unwrap();
+        let mut xhc = XHC.write();
 
         for i in 1..=xhc.max_ports() {
             let mut port = xhc.port_at(i);
@@ -360,7 +338,7 @@ fn kernel_entry(frame_buffer_config: &'static FrameBufferConfig, memory_map: &'s
 
     loop {
         unsafe { asm!("cli") };
-        let main_queue = unsafe { MAIN_QUEUE.get_mut() }.unwrap();
+        let mut main_queue = MAIN_QUEUE.write();
 
         if main_queue.len() == 0 {
             unsafe {
@@ -370,12 +348,12 @@ fn kernel_entry(frame_buffer_config: &'static FrameBufferConfig, memory_map: &'s
         }
 
         let msg = *main_queue.front().unwrap();
-        main_queue.pop();
+        main_queue.pop_front();
         unsafe { asm!("sti") };
 
         match msg.r#type() {
             MessageType::InteruptXHCI => {
-                let xhc = unsafe { XHC.get_mut() }.unwrap();
+                let mut xhc = XHC.write();
                 while xhc.primary_event_ring().has_front() {
                     let err = xhc.process_event();
                     if (&err).into() {

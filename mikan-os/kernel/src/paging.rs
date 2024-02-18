@@ -1,6 +1,6 @@
 use core::ops::{Index, IndexMut};
 
-use crate::asmfunc::set_cr3;
+use crate::{asmfunc::set_cr3, sync::RwLock};
 
 pub(crate) const PAGE_DIRECTORY_COUNT: usize = 64;
 
@@ -8,10 +8,10 @@ const PAGE_SIZE_4K: u64 = 4096;
 const PAGE_SIZE_2M: u64 = 512 * PAGE_SIZE_4K;
 const PAGE_SIZE_1G: u64 = 512 * PAGE_SIZE_2M;
 
-static mut PML4_TABLE: PageTable<u64, 512> = PageTable::<_, 512>::new(0);
-static mut PDP_TABLE: PageTable<u64, 512> = PageTable::<_, 512>::new(0);
-static mut PAGE_DIRECTORY: PageTable<[u64; 512], PAGE_DIRECTORY_COUNT> =
-    PageTable::<_, PAGE_DIRECTORY_COUNT>::new([0; 512]);
+static PML4_TABLE: RwLock<PageTable<u64, 512>> = RwLock::new(PageTable::<_, 512>::new(0));
+static PDP_TABLE: RwLock<PageTable<u64, 512>> = RwLock::new(PageTable::<_, 512>::new(0));
+static PAGE_DIRECTORY: RwLock<PageTable<[u64; 512], PAGE_DIRECTORY_COUNT>> =
+    RwLock::new(PageTable::<_, PAGE_DIRECTORY_COUNT>::new([0; 512]));
 
 #[repr(align(4096))]
 struct PageTable<T, const N: usize> {
@@ -49,18 +49,20 @@ impl<T, const N: usize> IndexMut<usize> for PageTable<T, N> {
 }
 
 pub(crate) fn setup_indentity_page_table() {
-    unsafe {
-        PML4_TABLE[0] = PDP_TABLE.as_ptr() as u64 | 0x003;
+    let mut pml4_table = PML4_TABLE.write();
+    let mut pdp_table = PDP_TABLE.write();
+    let mut page_directory = PAGE_DIRECTORY.write();
 
-        for i_pdpt in 0..PAGE_DIRECTORY.len() {
-            PDP_TABLE[i_pdpt] = PAGE_DIRECTORY[i_pdpt].as_ptr() as u64 | 0x003;
+    pml4_table[0] = pdp_table.as_ptr() as u64 | 0x003;
 
-            for i_pd in 0..PAGE_DIRECTORY[0].len() {
-                PAGE_DIRECTORY[i_pdpt][i_pd] =
-                    i_pdpt as u64 * PAGE_SIZE_1G + i_pd as u64 * PAGE_SIZE_2M | 0x083;
-            }
+    for i_pdpt in 0..page_directory.len() {
+        pdp_table[i_pdpt] = page_directory[i_pdpt].as_ptr() as u64 | 0x003;
+
+        for i_pd in 0..page_directory[0].len() {
+            page_directory[i_pdpt][i_pd] =
+                i_pdpt as u64 * PAGE_SIZE_1G + i_pd as u64 * PAGE_SIZE_2M | 0x083;
         }
-
-        set_cr3(PML4_TABLE.as_ptr() as u64);
     }
+
+    unsafe { set_cr3(pml4_table.as_ptr() as u64) };
 }

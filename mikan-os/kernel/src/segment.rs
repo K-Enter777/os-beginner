@@ -3,20 +3,22 @@ use core::mem::size_of;
 use crate::{
     asmfunc::load_gdt,
     bitfield::BitField,
+    sync::RwLock,
     x86_descriptor::{DescriptorType, DescriptorTypeEnum, SystemSegmentType},
 };
 
-static mut GDT: [SegmentDescriptor; 3] = [SegmentDescriptor::default(); 3];
+static GDT: RwLock<[SegmentDescriptor; 3]> = RwLock::new([SegmentDescriptor::default(); 3]);
 
 pub(crate) fn setup_segments() {
+    let mut gdt = GDT.write();
+    gdt[1] = SegmentDescriptor::code_segment(0, 0xfffff, false, true, false, 0);
+    gdt[2] = SegmentDescriptor::data_segment(0, 0xfffff, false, true, true, 0);
     unsafe {
-        GDT[1] = SegmentDescriptor::code_segment(0, 0xfffff, false, true, false, 0);
-        GDT[2] = SegmentDescriptor::data_segment(0, 0xfffff, false, true, true, 0);
         load_gdt(
-            (size_of::<SegmentDescriptor>() * GDT.len()) as u16,
-            GDT.as_ptr() as u64,
-        );
-    }
+            (size_of::<SegmentDescriptor>() * gdt.len()) as u16,
+            gdt.as_ptr() as u64,
+        )
+    };
 }
 
 /// セグメントディスクリプタを表す。
