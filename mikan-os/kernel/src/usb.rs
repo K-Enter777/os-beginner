@@ -48,6 +48,8 @@ pub(crate) struct Controller {
     er: EventRing,
 }
 
+unsafe impl Send for Controller {}
+
 impl Controller {
     pub(crate) fn new(mmio_base: u64) -> Self {
         let mut this = MaybeUninit::<Controller>::uninit();
