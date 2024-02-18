@@ -1,18 +1,18 @@
 #![allow(unused)]
 
+use alloc::vec::{self, Vec};
 use core::{
     cell::RefCell,
     fmt::{self, Display, LowerHex},
     ptr::addr_of_mut,
 };
 
-use spin::Mutex;
-
 use crate::{
     asmfunc::{io_in_32, io_out_32},
     bitfield::BitField,
     error::{self, WithError},
     make_error,
+    sync::RwLock,
 };
 
 /// CONFIG_ADDRESS レジスタの IO ポートアドレス
@@ -377,10 +377,7 @@ fn is_single_function_device(header_type: u8) -> bool {
 /// [DEVICES] の配列長。
 const DEVICE_MAX_LEN: usize = 32;
 /// [scan_all_bus] により発見された PCI デバイスの一覧。
-pub(crate) static DEVICES: Mutex<RefCell<[Option<Device>; DEVICE_MAX_LEN]>> =
-    Mutex::new(RefCell::new([None; 32]));
-/// [DEVICES] の有効な要素の数。
-pub(crate) static NUM_DEVICES: Mutex<RefCell<usize>> = Mutex::new(RefCell::new(0));
+pub(crate) static DEVICES: RwLock<Vec<Device>> = RwLock::new(Vec::new());
 
 const fn cals_bar_address(bar_index: u32) -> u8 {
     0x10 + 4 * bar_index as u8
@@ -561,18 +558,9 @@ fn make_address(bus: u8, device: u8, function: u8, reg_addr: u8) -> u32 {
 }
 
 fn add_device(device: Device) -> error::Error {
-    let mut num_devices = NUM_DEVICES.lock();
-    let num_devices = num_devices.get_mut();
+    let mut devices = DEVICES.write();
 
-    let mut devices = DEVICES.lock();
-    let devices = devices.get_mut();
-
-    if *num_devices == devices.len() {
-        return make_error!(error::Code::Full);
-    }
-
-    devices[*num_devices] = Some(device);
-    *num_devices += 1;
+    devices.push(device);
     make_error!(error::Code::Success)
 }
 
