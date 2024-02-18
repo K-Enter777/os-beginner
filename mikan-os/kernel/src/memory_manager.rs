@@ -1,14 +1,13 @@
 use core::{
     alloc::{GlobalAlloc, Layout},
-    cell::UnsafeCell,
     mem::size_of,
-    ops::{Index, IndexMut},
     ptr,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use uefi::table::boot::MemoryMap;
 
-use crate::{bitfield::BitField, memory_map};
+use crate::{bitfield::BitField, memory_map, sync::RwLock};
 
 /// グローバルアロケータ。
 #[global_allocator]
@@ -64,25 +63,25 @@ const FRAME_COUNT: usize = MAX_PHYSICAL_MEMORY / BYTES_PER_FRAME;
 const UEFI_PAGE_SIZE: usize = 4 * KIB;
 
 pub(crate) struct BitmapMemoryManager {
-    alloc_map: UnsafeCell<[MapLineType; FRAME_COUNT / BITS_PER_MAP_LINE]>,
-    range_begin: UnsafeCell<FrameId>,
-    range_end: UnsafeCell<FrameId>,
-    is_initialized: UnsafeCell<bool>,
+    alloc_map: RwLock<[MapLineType; FRAME_COUNT / BITS_PER_MAP_LINE]>,
+    range_begin: RwLock<FrameId>,
+    range_end: RwLock<FrameId>,
+    is_initialized: AtomicBool,
 }
 
 impl BitmapMemoryManager {
     /// [BitmapMemoryManager] を作る。
     const fn new() -> Self {
         Self {
-            alloc_map: UnsafeCell::new([0; FRAME_COUNT / BITS_PER_MAP_LINE]),
-            range_begin: UnsafeCell::new(FrameId::new(0)),
-            range_end: UnsafeCell::new(FrameId::new(0)),
-            is_initialized: UnsafeCell::new(false),
+            alloc_map: RwLock::new([0; FRAME_COUNT / BITS_PER_MAP_LINE]),
+            range_begin: RwLock::new(FrameId::new(0)),
+            range_end: RwLock::new(FrameId::new(0)),
+            is_initialized: AtomicBool::new(false),
         }
     }
 
     pub(crate) fn initialize(&self, memory_map: &MemoryMap) {
-        if unsafe { *self.is_initialized.get() } {
+        if self.is_initialized.load(Ordering::Acquire) {
             return;
         }
 
@@ -107,11 +106,9 @@ impl BitmapMemoryManager {
             }
         }
 
-        unsafe {
-            *self.range_begin.get() = FrameId::new(1);
-            *self.range_end.get() = FrameId::from_addr(available_end);
-            *self.is_initialized.get() = true;
-        }
+        *self.range_begin.write() = FrameId::new(1);
+        *self.range_end.write() = FrameId::from_addr(available_end);
+        self.is_initialized.store(true, Ordering::Release);
     }
 
     fn mark_allocated(&self, start_frame: FrameId, num_frames: usize) {
@@ -125,27 +122,24 @@ impl BitmapMemoryManager {
         let line_index = frame.id() / BITS_PER_MAP_LINE;
         let bit_index = frame.id() % BITS_PER_MAP_LINE;
 
-        unsafe { &*self.alloc_map.get() }
-            .index(line_index)
-            .get_bit(bit_index as u32)
+        self.alloc_map.read()[line_index].get_bit(bit_index as u32)
     }
 
     fn set_bit(&self, frame: FrameId, allocated: bool) {
         let line_index = frame.id() / BITS_PER_MAP_LINE;
         let bit_index = frame.id() % BITS_PER_MAP_LINE;
 
-        let map = unsafe { &mut *self.alloc_map.get() }.index_mut(line_index);
-        map.set_bit(bit_index as u32, allocated);
+        let mut map = self.alloc_map.write();
+        map[line_index].set_bit(bit_index as u32, allocated);
     }
 }
 
-// FIXME: これは今は大丈夫だが、マルチタスクが始まったら問題になる。
 unsafe impl Send for BitmapMemoryManager {}
 unsafe impl Sync for BitmapMemoryManager {}
 
 unsafe impl GlobalAlloc for BitmapMemoryManager {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if !*self.is_initialized.get() {
+        if !self.is_initialized.load(Ordering::Acquire) {
             return ptr::null_mut();
         }
 
@@ -155,7 +149,7 @@ unsafe impl GlobalAlloc for BitmapMemoryManager {
         let align_frames = layout.align() / BYTES_PER_FRAME;
         let align_frames = if align_frames == 0 { 1 } else { align_frames };
 
-        let mut start_frame_id = (*self.range_begin.get()).id();
+        let mut start_frame_id = self.range_begin.read().id();
         loop {
             // アラインメント調整
             let res = start_frame_id % align_frames;
@@ -165,7 +159,7 @@ unsafe impl GlobalAlloc for BitmapMemoryManager {
 
             let mut i = 0;
             while i < num_frames {
-                if start_frame_id + i >= (*self.range_end.get()).id() {
+                if start_frame_id + i >= self.range_end.read().id() {
                     return ptr::null_mut();
                 }
                 if self.is_allocated(FrameId::new(start_frame_id + i)) {
