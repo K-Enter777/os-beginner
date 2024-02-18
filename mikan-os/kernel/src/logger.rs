@@ -2,6 +2,8 @@
 
 use core::ffi::{c_char, CStr};
 
+use crate::sync::RwLock;
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 #[repr(C)]
 pub(crate) enum LogLevel {
@@ -11,16 +13,16 @@ pub(crate) enum LogLevel {
     Debug = 7,
 }
 
-static mut LOG_LEVEL: LogLevel = LogLevel::Warn;
+static LOG_LEVEL: RwLock<LogLevel> = RwLock::new(LogLevel::Warn);
 
 pub(crate) fn set_log_level(level: LogLevel) {
     unsafe {
-        LOG_LEVEL = level;
+        *LOG_LEVEL.write() = level;
     }
 }
 
 pub(crate) fn get_log_level() -> LogLevel {
-    unsafe { LOG_LEVEL }
+    *LOG_LEVEL.read()
 }
 
 #[macro_export]
