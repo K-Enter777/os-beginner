@@ -1,29 +1,7 @@
-use core::convert::From;
-
-pub(crate) enum DescriptorType {
-    Upper8Bytes = 0,
-    LDT = 2,
-    TSSAvailable = 9,
-    TSSBusy = 11,
-    CallGate = 12,
-    InterruptGate = 14,
-    TrapGate = 15,
-}
-
-impl From<u8> for DescriptorType {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => Self::Upper8Bytes,
-            2 => Self::LDT,
-            9 => Self::TSSAvailable,
-            11 => Self::TSSBusy,
-            12 => Self::CallGate,
-            14 => Self::InterruptGate,
-            15 => Self::TrapGate,
-            _ => panic!(),
-        }
-    }
-}
+use crate::{
+    bitfield::BitField,
+    x86_descriptor::{DescriptorType, SystemSegmentType},
+};
 
 #[repr(packed)]
 #[derive(Clone, Copy)]
@@ -39,8 +17,8 @@ impl InterruptDescriptorAttribute {
         Self { data: 0 }
     }
 
-    pub(crate) const fn new(
-        r#type: DescriptorType,
+    pub(crate) fn new(
+        r#type: SystemSegmentType,
         descriptor_privilege_level: u8,
         present: bool,
     ) -> Self {
@@ -73,9 +51,11 @@ struct InterruptDescriptorAttributeBits {
 
 impl InterruptDescriptorAttributeBits {
     #![allow(unused)]
-    const fn new(r#type: DescriptorType, descriptor_privilege_level: u8, present: bool) -> Self {
-        let etc_2 =
-            (if present { 1 } else { 0 } << 7) | (descriptor_privilege_level << 5) | r#type as u8;
+    fn new(r#type: SystemSegmentType, descriptor_privilege_level: u8, present: bool) -> Self {
+        let mut etc_2 = 0;
+        etc_2.set_bits(..4, DescriptorType::system_segment(r#type).into());
+        etc_2.set_bits(5..7, descriptor_privilege_level);
+        etc_2.set_bit(7, present);
         Self { etc_1: 0, etc_2 }
     }
 
