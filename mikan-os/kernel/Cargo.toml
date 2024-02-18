@@ -21,7 +21,6 @@ panic = "abort"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-spin = "0.9.8"
 custom-attribute = { path = "../custom-attribute" }
 uefi = "0.26.0"
 
