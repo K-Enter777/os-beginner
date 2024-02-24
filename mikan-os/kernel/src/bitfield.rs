@@ -30,7 +30,7 @@ macro_rules! impl_bit_field {
                     return false;
                 }
 
-                if *self >> bit != 0 {
+                if (*self >> bit) & 0x01 != 0 {
                     true
                 } else {
                     false
