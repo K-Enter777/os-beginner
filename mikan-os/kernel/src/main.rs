@@ -138,12 +138,17 @@ fn int_handler_xhci(_frame: &InterruptFrame) {
 // この呼び出しの前にスタック領域を変更するため、でかい構造体をそのまま渡せなくなる
 // それを避けるために参照で渡す
 #[custom_attribute::kernel_entry(KERNEL_MAIN_STACK, 1024 * 1024)]
-fn kernel_entry(frame_buffer_config: &'static FrameBufferConfig, memory_map: &'static MemoryMap) {
+fn kernel_entry(
+    frame_buffer_config: &'static FrameBufferConfig,
+    memory_map: &'static MemoryMap,
+    kernel_base: usize,
+    kernel_size: usize,
+) {
     // 参照元は今後使用される可能性のあるメモリ領域にあるため、コピーしておく
     let frame_buffer_config = frame_buffer_config.clone();
 
     // メモリアロケータの初期化
-    memory_manager::GLOBAL.initialize(memory_map);
+    memory_manager::GLOBAL.initialize(memory_map, kernel_base, kernel_size);
 
     let pixel_writer: Box<dyn PixelWriter + Send> = match frame_buffer_config.pixel_format {
         PixelFormat::Rgb => Box::new(RgbResv8BitPerColorPixelWriter::new(frame_buffer_config)),

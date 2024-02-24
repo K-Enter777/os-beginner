@@ -80,7 +80,12 @@ impl BitmapMemoryManager {
         }
     }
 
-    pub(crate) fn initialize(&self, memory_map: &MemoryMap) {
+    pub(crate) fn initialize(
+        &self,
+        memory_map: &MemoryMap,
+        kernel_base: usize,
+        kernel_size: usize,
+    ) {
         if self.is_initialized.load(Ordering::Acquire) {
             return;
         }
@@ -105,6 +110,8 @@ impl BitmapMemoryManager {
                 // );
             }
         }
+
+        self.mark_allocated(FrameId::from_addr(kernel_base), get_num_frames(kernel_size));
 
         *self.range_begin.write() = FrameId::new(1);
         *self.range_end.write() = FrameId::from_addr(available_end);
