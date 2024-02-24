@@ -141,9 +141,6 @@ impl BitmapMemoryManager {
     }
 }
 
-unsafe impl Send for BitmapMemoryManager {}
-unsafe impl Sync for BitmapMemoryManager {}
-
 unsafe impl GlobalAlloc for BitmapMemoryManager {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if !self.is_initialized.load(Ordering::Acquire) {
