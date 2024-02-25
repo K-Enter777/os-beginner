@@ -62,10 +62,15 @@ const FRAME_COUNT: usize = MAX_PHYSICAL_MEMORY / BYTES_PER_FRAME;
 
 const UEFI_PAGE_SIZE: usize = 4 * KIB;
 
+/// ビットを使ってメモリの使用可能領域を管理する構造体。
 pub(crate) struct BitmapMemoryManager {
+    /// フレームが使用可能かどうかを保持しておく。
     alloc_map: RwLock<[MapLineType; FRAME_COUNT / BITS_PER_MAP_LINE]>,
+    /// 使用可能領域の最初のフレーム。
     range_begin: RwLock<FrameId>,
+    /// 使用可能領域の最後のフレーム。
     range_end: RwLock<FrameId>,
+    /// 初期化されているかどうかを表す。
     is_initialized: AtomicBool,
 }
 
@@ -80,6 +85,11 @@ impl BitmapMemoryManager {
         }
     }
 
+    /// [MemoryMap] を元に [BitmapMemoryManager] を初期化する。
+    ///
+    /// * `memory_map` - メモリ情報。
+    /// * `kernel_base` - カーネルが展開されたメモリの先頭。
+    /// * `kernel_size` - 展開されたカーネルのサイズ。
     pub(crate) fn initialize(
         &self,
         memory_map: &MemoryMap,
@@ -92,6 +102,8 @@ impl BitmapMemoryManager {
 
         let mut available_end = 0;
         for desc in memory_map.entries() {
+            // available_end から desc.phys_start までは使用不可能領域のはずだから、
+            // そこを割り当て済みとする
             if available_end < desc.phys_start as usize {
                 self.mark_allocated(
                     FrameId::from_addr(available_end),
@@ -102,12 +114,6 @@ impl BitmapMemoryManager {
             let phys_end = desc.phys_start as usize + desc.page_count as usize * UEFI_PAGE_SIZE;
             if memory_map::is_available(desc.ty) {
                 available_end = phys_end;
-            } else {
-                // REVIEW: 以下のコメントアウトは要らないと思うが……
-                // self.mark_allocated(
-                //     FrameId::from_addr(desc.phys_start as usize),
-                //     get_num_frames(desc.page_count as usize * UEFI_PAGE_SIZE),
-                // );
             }
         }
 
@@ -118,13 +124,17 @@ impl BitmapMemoryManager {
         self.is_initialized.store(true, Ordering::Release);
     }
 
+    /// あるフレームから数フレームを割り当て済みにする。
+    ///
+    /// * `start_frame` - 割り当て済みにする最初のフレーム。
+    /// * `num_frames` - 割り当て済みにするフレームの数。
     fn mark_allocated(&self, start_frame: FrameId, num_frames: usize) {
-        // OPTIMIZE: まとめてセットできるようにした方が良い
-        for i in 0..num_frames {
-            self.set_bit(FrameId::new(start_frame.id() + i), true);
-        }
+        self.set_bits(start_frame, num_frames, true);
     }
 
+    /// 指定されたフレームが割り当て済みかどうかを返す。
+    ///
+    /// * `frame` - 割り当て済みか判定するフレーム。
     fn is_allocated(&self, frame: FrameId) -> bool {
         let line_index = frame.id() / BITS_PER_MAP_LINE;
         let bit_index = frame.id() % BITS_PER_MAP_LINE;
@@ -132,12 +142,42 @@ impl BitmapMemoryManager {
         self.alloc_map.read()[line_index].get_bit(bit_index as u32)
     }
 
+    /// 指定されたフレームが割り当て済みかどうかを変更する。
+    ///
+    /// * `frame` - 変更するフレーム。
+    /// * `allocated` - 割り当て済みかどうか。
     fn set_bit(&self, frame: FrameId, allocated: bool) {
         let line_index = frame.id() / BITS_PER_MAP_LINE;
         let bit_index = frame.id() % BITS_PER_MAP_LINE;
 
         let mut map = self.alloc_map.write();
         map[line_index].set_bit(bit_index as u32, allocated);
+    }
+
+    /// 指定されたフレームから数フレームが割り当て済みかどうかを変更する。
+    ///
+    /// * `frame` - 最初のフレーム。
+    /// * `num_frames` - 変更するフレームの数。
+    /// * `allocated` - 割り当て済みかどうか。
+    fn set_bits(&self, frame: FrameId, mut num_frames: usize, allocated: bool) {
+        let allocated = if allocated { MapLineType::MAX } else { 0 };
+
+        let mut line_index = frame.id() / BITS_PER_MAP_LINE;
+        let mut bit_index = frame.id() % BITS_PER_MAP_LINE;
+
+        let mut map = self.alloc_map.write();
+        while num_frames > 0 {
+            if bit_index + num_frames > BITS_PER_MAP_LINE {
+                map[line_index].set_bits(bit_index as u32..BITS_PER_MAP_LINE as u32, allocated);
+                num_frames -= BITS_PER_MAP_LINE - bit_index;
+            } else {
+                map[line_index]
+                    .set_bits(bit_index as u32..(bit_index + num_frames) as u32, allocated);
+                num_frames -= num_frames;
+            }
+            line_index += 1;
+            bit_index = 0;
+        }
     }
 }
 
