@@ -183,6 +183,9 @@ impl BitmapMemoryManager {
 
 unsafe impl GlobalAlloc for BitmapMemoryManager {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // FIXME: 割り当ての確認と割り当てを１つのロック中に行わないと、
+        // 他のスレッドに割り当てられてしまう可能性があるので、修正する。
+
         if !self.is_initialized.load(Ordering::Acquire) {
             return ptr::null_mut();
         }
