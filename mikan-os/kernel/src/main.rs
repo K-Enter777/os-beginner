@@ -79,8 +79,10 @@ static IDT: RwLock<[InterruptDescriptor; 256]> =
 #[macro_export]
 macro_rules! printk {
     ($($arg:tt)*) => {
-        use core::fmt::Write;
-        write!($crate::CONSOLE.write(), $($arg)*).unwrap();
+        {
+            use core::fmt::Write;
+            write!($crate::CONSOLE.write(), $($arg)*).unwrap();
+        }
     };
 }
 
