@@ -2,7 +2,6 @@ use core::{
     alloc::{GlobalAlloc, Layout},
     mem::size_of,
     ptr,
-    sync::atomic::{AtomicBool, Ordering},
 };
 
 use uefi::table::boot::MemoryMap;
@@ -70,8 +69,8 @@ pub(crate) struct BitmapMemoryManager {
     range_begin: RwLock<FrameId>,
     /// 使用可能領域の最後のフレーム。
     range_end: RwLock<FrameId>,
-    /// 初期化されているかどうかを表す。
-    is_initialized: AtomicBool,
+    /// ロック。
+    lock: RwLock<()>,
 }
 
 impl BitmapMemoryManager {
@@ -81,7 +80,7 @@ impl BitmapMemoryManager {
             alloc_map: RwLock::new([0; FRAME_COUNT / BITS_PER_MAP_LINE]),
             range_begin: RwLock::new(FrameId::new(0)),
             range_end: RwLock::new(FrameId::new(0)),
-            is_initialized: AtomicBool::new(false),
+            lock: RwLock::new(()),
         }
     }
 
@@ -96,7 +95,11 @@ impl BitmapMemoryManager {
         kernel_base: usize,
         kernel_size: usize,
     ) {
-        if self.is_initialized.load(Ordering::Acquire) {
+        // 同時に初期化されないようにロックを取得
+        let _lock = self.lock.write();
+
+        // 使用可能領域の最初が 0 でない場合は初期化済み
+        if self.range_begin.read().id() != 0 {
             return;
         }
 
@@ -121,7 +124,6 @@ impl BitmapMemoryManager {
 
         *self.range_begin.write() = FrameId::new(1);
         *self.range_end.write() = FrameId::from_addr(available_end);
-        self.is_initialized.store(true, Ordering::Release);
     }
 
     /// あるフレームから数フレームを割り当て済みにする。
@@ -183,12 +185,10 @@ impl BitmapMemoryManager {
 
 unsafe impl GlobalAlloc for BitmapMemoryManager {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // FIXME: 割り当ての確認と割り当てを１つのロック中に行わないと、
-        // 他のスレッドに割り当てられてしまう可能性があるので、修正する。
-
-        if !self.is_initialized.load(Ordering::Acquire) {
-            return ptr::null_mut();
-        }
+        // 他のスレッドが同時に空き領域を探して、
+        // 空いていた領域を同時に割り当てないようにするため、
+        // ロックを取得
+        let _lock = self.lock.write();
 
         let num_frames = get_num_frames(layout.size());
 
