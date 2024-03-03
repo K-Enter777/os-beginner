@@ -10,7 +10,7 @@ use core::{
 use crate::{
     asmfunc::{io_in_32, io_out_32},
     bitfield::BitField,
-    error::{self, WithError},
+    error::{self, Result},
     make_error,
     sync::RwLock,
 };
@@ -126,9 +126,9 @@ impl Device {
         write_data(value);
     }
 
-    pub(crate) fn read_bar(&self, bar_index: u32) -> WithError<u64> {
+    pub(crate) fn read_bar(&self, bar_index: u32) -> Result<u64> {
         if bar_index >= 6 {
-            return WithError::new(0, make_error!(error::Code::IndexOutOfRange));
+            return Err(make_error!(error::Code::IndexOutOfRange));
         }
 
         let addr = cals_bar_address(bar_index);
@@ -136,19 +136,16 @@ impl Device {
 
         // 32 bit アドレス
         if bar & 4 == 0 {
-            return WithError::new(bar as u64, make_error!(error::Code::Success));
+            return Ok(bar as u64);
         }
 
         // 64 bit アドレス
         if bar_index >= 5 {
-            return WithError::new(0, make_error!(error::Code::IndexOutOfRange));
+            return Err(make_error!(error::Code::IndexOutOfRange));
         }
 
         let bar_upper = self.read_conf_reg(addr + 4);
-        WithError::new(
-            bar as u64 | (bar_upper as u64) << 32,
-            make_error!(error::Code::Success),
-        )
+        Ok(bar as u64 | (bar_upper as u64) << 32)
     }
 
     fn read_capability_header(&self, addr: u8) -> CapabilityHeader {
@@ -162,7 +159,7 @@ impl Device {
         msg_addr: u32,
         msg_data: u32,
         num_vector_exponent: u32,
-    ) -> error::Error {
+    ) -> Result<()> {
         let mut cap_addr = self.read_conf_reg(0x34) & 0xff;
         let mut msi_cap_addr = 0;
         let mut msix_cap_addr = 0;
@@ -187,7 +184,7 @@ impl Device {
                 num_vector_exponent,
             )
         } else {
-            make_error!(error::Code::NoPCIMSI)
+            Err(make_error!(error::Code::NoPCIMSI))
         }
     }
 
@@ -255,7 +252,7 @@ impl Device {
         msg_addr: u32,
         msg_data: u32,
         num_vector_exponent: u32,
-    ) -> error::Error {
+    ) -> Result<()> {
         let mut msi_cap = self.read_msi_capability(cap_addr);
 
         // なんか packed 構造体の要素への参照は UB（未定義動作）らしい
@@ -280,7 +277,7 @@ impl Device {
         msi_cap.msg_data = msg_data;
 
         self.write_msi_capability(cap_addr, &msi_cap);
-        make_error!(error::Code::Success)
+        Ok(())
     }
 
     fn configure_msix_register(
@@ -289,8 +286,8 @@ impl Device {
         msg_addr: u32,
         msg_data: u32,
         num_vector_exponent: u32,
-    ) -> error::Error {
-        make_error!(error::Code::NotImplemented)
+    ) -> Result<()> {
+        Err(make_error!(error::Code::NotImplemented))
     }
 
     pub(crate) fn configure_msi_fixed_destination(
@@ -300,7 +297,7 @@ impl Device {
         delivery_mode: MSIDeliverMode,
         vector: u8,
         num_vector_exponent: u32,
-    ) -> error::Error {
+    ) -> Result<()> {
         let msg_addr = 0xfee0_0000 | ((apic_id as u32) << 12);
         let mut msg_data = ((delivery_mode as u32) << 8) | vector as u32;
         if trigger_mode == MSITriggerMode::Level {
@@ -387,7 +384,7 @@ const fn cals_bar_address(bar_index: u32) -> u8 {
 ///
 /// バス 0 から再帰的に PCI デバイスを探索し、[DEVICES] の先頭から詰めて書き込む。
 /// 発見したデバイスの数を [NUM_DEVICES] に設定する。
-pub(crate) fn scan_all_bus() -> error::Error {
+pub(crate) fn scan_all_bus() -> Result<()> {
     let mut num_device = 0;
 
     let header_type = read_header_type(0, 0, 0);
@@ -399,12 +396,9 @@ pub(crate) fn scan_all_bus() -> error::Error {
         if read_vendor_id(0, 0, function) == 0xffff {
             continue;
         }
-        let err = scan_bus(function);
-        if (&err).into() {
-            return err;
-        }
+        scan_bus(function)?;
     }
-    make_error!(error::Code::Success)
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -557,24 +551,21 @@ fn make_address(bus: u8, device: u8, function: u8, reg_addr: u8) -> u32 {
     shl(1, 31) | shl(bus, 16) | shl(device, 11) | shl(function, 8) | (reg_addr & 0xfc) as u32
 }
 
-fn add_device(device: Device) -> error::Error {
+fn add_device(device: Device) -> Result<()> {
     let mut devices = DEVICES.write();
 
     devices.push(device);
-    make_error!(error::Code::Success)
+    Ok(())
 }
 
 /// 指定のファンクションを devices に追加する。
 /// もし PCI-PCI ブリッジなら、セカンダリバスに対し [scan_bus] を実行する。
-fn scan_function(bus: u8, device: u8, function: u8) -> error::Error {
+fn scan_function(bus: u8, device: u8, function: u8) -> Result<()> {
     let class_code = read_class_code(bus, device, function);
     let header_type = read_header_type(bus, device, function);
     let dev = Device::new(bus, device, function, header_type, class_code);
 
-    let err = add_device(dev);
-    if (&err).into() {
-        return err;
-    }
+    add_device(dev)?;
 
     // PCI-PCI ブリッジの場合
     if class_code.match_base_sub(0x06, 0x04) {
@@ -583,43 +574,34 @@ fn scan_function(bus: u8, device: u8, function: u8) -> error::Error {
         return scan_bus(secondary_bus as u8);
     }
 
-    make_error!(error::Code::Success)
+    Ok(())
 }
 
 /// 指定のデバイス番号の各ファンクションをスキャンする。
 /// 有効なファンクションを見つけたら [scan_function] を実行する。
-fn scan_device(bus: u8, device: u8) -> error::Error {
-    let err = scan_function(bus, device, 0);
-    if (&err).into() {
-        return err;
-    }
+fn scan_device(bus: u8, device: u8) -> Result<()> {
+    scan_function(bus, device, 0)?;
     if is_single_function_device(read_header_type(bus, device, 0)) {
-        return make_error!(error::Code::Success);
+        return Ok(());
     }
 
     for function in 1..8 {
         if read_vendor_id(bus, device, function) == 0xffff {
             continue;
         }
-        let err = scan_function(bus, device, function);
-        if (&err).into() {
-            return err;
-        }
+        scan_function(bus, device, function)?;
     }
-    make_error!(error::Code::Success)
+    Ok(())
 }
 
 /// 指定のバス番号の各デバイスをスキャンする。
 /// 有効なデバイスを見つけたら [scan_device] を実行する。
-fn scan_bus(bus: u8) -> error::Error {
+fn scan_bus(bus: u8) -> Result<()> {
     for device in 0..DEVICE_MAX_LEN as u8 {
         if read_vendor_id(bus, device, 0) == 0xffff {
             continue;
         }
-        let err = scan_device(bus, device);
-        if (&err).into() {
-            return err;
-        }
+        scan_device(bus, device)?;
     }
-    return make_error!(error::Code::Success);
+    Ok(())
 }

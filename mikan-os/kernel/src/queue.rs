@@ -3,7 +3,10 @@ use core::{
     mem::{size_of, transmute},
 };
 
-use crate::{error, make_error};
+use crate::{
+    error::{self, Result},
+    make_error,
+};
 
 pub(crate) struct ArrayQueue<'a, T> {
     data: &'a mut [T],
@@ -30,9 +33,9 @@ impl<'a, T> ArrayQueue<'a, T> {
         }
     }
 
-    pub(crate) fn push(&mut self, value: T) -> error::Error {
+    pub(crate) fn push(&mut self, value: T) -> Result<()> {
         if self.count == self.capacity {
-            return make_error!(error::Code::Full);
+            return Err(make_error!(error::Code::Full));
         }
 
         self.data[self.write_pos] = value;
@@ -45,7 +48,7 @@ impl<'a, T> ArrayQueue<'a, T> {
             self.write_pos + 1
         };
 
-        make_error!(error::Code::Success)
+        Ok(())
     }
 
     pub(crate) fn front(&self) -> Option<&T> {
@@ -56,9 +59,9 @@ impl<'a, T> ArrayQueue<'a, T> {
         }
     }
 
-    pub(crate) fn pop(&mut self) -> error::Error {
+    pub(crate) fn pop(&mut self) -> Result<()> {
         if self.count == 0 {
-            return make_error!(error::Code::Empty);
+            return Err(make_error!(error::Code::Empty));
         }
 
         self.count -= 1;
@@ -69,7 +72,7 @@ impl<'a, T> ArrayQueue<'a, T> {
             self.read_pos + 1
         };
 
-        make_error!(error::Code::Success)
+        Ok(())
     }
 
     pub(crate) fn len(&self) -> usize {

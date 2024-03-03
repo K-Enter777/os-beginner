@@ -222,8 +222,8 @@ fn kernel_entry(
     ));
 
     // デバイス一覧の表示
-    let err = pci::scan_all_bus();
-    log!(LogLevel::Debug, "scan_all_bus: {}", err);
+    let result = pci::scan_all_bus();
+    log!(LogLevel::Debug, "scan_all_bus: {:?}", result);
 
     let mut xhc_dev = None;
     {
@@ -289,19 +289,21 @@ fn kernel_entry(
     }
 
     let bsp_local_apic_id = (unsafe { *(0xfee0_0020 as *const u32) } >> 24) as u8;
-    xhc_dev.configure_msi_fixed_destination(
-        bsp_local_apic_id,
-        pci::MSITriggerMode::Level,
-        pci::MSIDeliverMode::Fixed,
-        InterruptVector::XHCI as u8,
-        0,
-    );
+    xhc_dev
+        .configure_msi_fixed_destination(
+            bsp_local_apic_id,
+            pci::MSITriggerMode::Level,
+            pci::MSIDeliverMode::Fixed,
+            InterruptVector::XHCI as u8,
+            0,
+        )
+        .unwrap();
     let xhc_dev = xhc_dev;
 
     // xHC の BAR から情報を得る
     let xhc_bar = xhc_dev.read_bar(0);
-    log!(LogLevel::Debug, "ReadBar: {}", xhc_bar.error());
-    let xhc_mmio_base = *xhc_bar.value() & !0xf;
+    log!(LogLevel::Debug, "ReadBar: {:?}", xhc_bar);
+    let xhc_mmio_base = xhc_bar.unwrap() & !0xf;
     log!(LogLevel::Debug, "xHC mmio_base = {:08x}", xhc_mmio_base);
 
     let mut xhc = Controller::new(xhc_mmio_base);
@@ -310,12 +312,12 @@ fn kernel_entry(
         switch_ehci2xhci(&xhc_dev);
     }
     {
-        let err = xhc.initialize();
-        log!(LogLevel::Debug, "xhc.initialize: {}", err);
+        let result = xhc.initialize();
+        log!(LogLevel::Debug, "xhc.initialize: {:?}", result);
     }
 
     log!(LogLevel::Info, "xHC starting");
-    xhc.run();
+    xhc.run().unwrap();
 
     XHC.init(xhc);
 
@@ -334,8 +336,7 @@ fn kernel_entry(
             );
 
             if port.is_connected() {
-                let err = xhc.configure_port(&mut port);
-                if (&err).into() {
+                if let Err(err) = xhc.configure_port(&mut port) {
                     log!(LogLevel::Error, "failed to configure port: {}", err);
                     continue;
                 }
@@ -362,8 +363,7 @@ fn kernel_entry(
             MessageType::InteruptXHCI => {
                 let mut xhc = XHC.write();
                 while xhc.primary_event_ring().has_front() {
-                    let err = xhc.process_event();
-                    if (&err).into() {
+                    if let Err(err) = xhc.process_event() {
                         log!(LogLevel::Error, "Error while process_evnet: {}", err);
                     }
                 }
