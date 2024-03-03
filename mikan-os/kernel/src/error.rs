@@ -2,10 +2,11 @@
 
 use core::fmt::{self, Display};
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+pub(crate) type Result<T> = core::result::Result<T, Error>;
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 #[repr(C)]
 pub(crate) enum Code {
-    Success,
     Full,
     Empty,
     NoEnoughMemory,
@@ -35,13 +36,11 @@ pub(crate) enum Code {
     NoSuchEntry,
     FreeTypeError,
     EndpointNotInCharge,
-    LastOfCode, // これは常に最後に配置する
 }
 
 impl Display for Code {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Success => write!(f, "Success"),
             Self::Full => write!(f, "Full"),
             Self::Empty => write!(f, "Empty"),
             Self::NoEnoughMemory => write!(f, "NoEnoughMemory"),
@@ -71,12 +70,11 @@ impl Display for Code {
             Self::NoSuchEntry => write!(f, "NoSuchEntry"),
             Self::FreeTypeError => write!(f, "FreeTypeError"),
             Self::EndpointNotInCharge => write!(f, "EndpointNotInCharge"),
-            Self::LastOfCode => write!(f, "LastOfCode"),
         }
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Error {
     code: Code,
     line: u32,
@@ -112,35 +110,4 @@ macro_rules! make_error {
     ($code:expr) => {
         $crate::error::Error::new($code, file!(), line!())
     };
-}
-
-impl From<Error> for bool {
-    fn from(value: Error) -> Self {
-        value.code != Code::Success
-    }
-}
-
-impl From<&Error> for bool {
-    fn from(value: &Error) -> Self {
-        value.code != Code::Success
-    }
-}
-
-pub(crate) struct WithError<T> {
-    value: T,
-    error: Error,
-}
-
-impl<T> WithError<T> {
-    pub(crate) fn new(value: T, error: Error) -> Self {
-        Self { value, error }
-    }
-
-    pub(crate) fn value(&self) -> &T {
-        &self.value
-    }
-
-    pub(crate) fn error(&self) -> Error {
-        self.error
-    }
 }
