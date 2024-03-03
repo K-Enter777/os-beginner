@@ -98,6 +98,11 @@ impl Console {
             self.buffer[ROW_NUM - 1] = [0u8; COLUMN_NUM];
         }
     }
+
+    /// 行の先頭であるかを返す。
+    pub(crate) fn is_head(&self) -> bool {
+        self.cursor_column == 0
+    }
 }
 
 impl Write for Console {

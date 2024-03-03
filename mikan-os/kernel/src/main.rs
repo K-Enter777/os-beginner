@@ -372,7 +372,10 @@ fn kernel_entry(
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    // FIXME: 前の改行の有無をチェックし、なければ改行を追加する
+    // 前の改行の有無をチェックし、なければ改行を追加する
+    if !CONSOLE.read().is_head() {
+        printkln!();
+    }
     printkln!("{}", info);
     halt()
 }
