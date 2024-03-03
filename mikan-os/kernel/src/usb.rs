@@ -3,7 +3,7 @@ use core::{
     mem::MaybeUninit,
 };
 
-use crate::error;
+use crate::error::{self, Error, Result};
 
 extern "C" {
     #[link_name = "_ZN3usb4xhci10ControllerC2Em"]
@@ -59,11 +59,11 @@ impl Controller {
         }
     }
 
-    pub(crate) fn initialize(&mut self) -> error::Error {
+    pub(crate) fn initialize(&mut self) -> Result<()> {
         unsafe { contoller_initialize(self as *mut Self) }.into()
     }
 
-    pub(crate) fn run(&mut self) -> error::Error {
+    pub(crate) fn run(&mut self) -> Result<()> {
         unsafe { controller_run(self as *mut Self) }.into()
     }
 
@@ -75,11 +75,11 @@ impl Controller {
         unsafe { controller_port_at(self as *mut Self, port_num) }
     }
 
-    pub(crate) fn configure_port(&mut self, port: &mut Port) -> error::Error {
+    pub(crate) fn configure_port(&mut self, port: &mut Port) -> Result<()> {
         unsafe { xhci_configure_port(self as *mut Self, port as *mut Port) }.into()
     }
 
-    pub(crate) fn process_event(&mut self) -> error::Error {
+    pub(crate) fn process_event(&mut self) -> Result<()> {
         unsafe { xhci_process_event(self as *mut Self) }.into()
     }
 
@@ -142,20 +142,103 @@ impl HIDMouseDriver {
     }
 }
 
+/// C++ 版の [Code][error::Code] に対応する列挙型。
+#[repr(C)]
+// 以下の構造体は C++ 側からしか使われないため、Rust 側では使わない
+#[allow(unused)]
+pub(crate) enum CxxCode {
+    Success,
+    Full,
+    Empty,
+    NoEnoughMemory,
+    IndexOutOfRange,
+    HostControllerNotHalted,
+    InvalidSlotID,
+    PortNotConnected,
+    InvalidEndpointNumber,
+    TransferRingNotSet,
+    AlreadyAllocated,
+    NotImplemented,
+    InvalidDescriptor,
+    BufferTooSmall,
+    UnknownDevice,
+    NoCorrespondingSetupStage,
+    TransferFailed,
+    InvalidPhase,
+    UnknownXHCISpeedID,
+    NoWaiter,
+    NoPCIMSI,
+    UnknownPixelFormat,
+    NoSuchTask,
+    InvalidFormat,
+    FrameTooSmall,
+    InvalidFile,
+    IsDirectory,
+    NoSuchEntry,
+    FreeTypeError,
+    EndpointNotInCharge,
+}
+
+impl Into<error::Code> for CxxCode {
+    /// C++ 版の [CxxCode] から Rust 版の [Code][error::Code] に変換する。
+    ///
+    /// # Note
+    /// この関数は、[CxxCode::Success] は変換できない。
+    fn into(self) -> error::Code {
+        match self {
+            CxxCode::Success => panic!("CxxCode::Success cannot be converted into error::Code"),
+            CxxCode::Full => error::Code::Full,
+            CxxCode::Empty => error::Code::Empty,
+            CxxCode::NoEnoughMemory => error::Code::NoEnoughMemory,
+            CxxCode::IndexOutOfRange => error::Code::IndexOutOfRange,
+            CxxCode::HostControllerNotHalted => error::Code::HostControllerNotHalted,
+            CxxCode::InvalidSlotID => error::Code::InvalidSlotID,
+            CxxCode::PortNotConnected => error::Code::PortNotConnected,
+            CxxCode::InvalidEndpointNumber => error::Code::InvalidEndpointNumber,
+            CxxCode::TransferRingNotSet => error::Code::TransferRingNotSet,
+            CxxCode::AlreadyAllocated => error::Code::AlreadyAllocated,
+            CxxCode::NotImplemented => error::Code::NotImplemented,
+            CxxCode::InvalidDescriptor => error::Code::InvalidDescriptor,
+            CxxCode::BufferTooSmall => error::Code::BufferTooSmall,
+            CxxCode::UnknownDevice => error::Code::UnknownDevice,
+            CxxCode::NoCorrespondingSetupStage => error::Code::NoCorrespondingSetupStage,
+            CxxCode::TransferFailed => error::Code::TransferFailed,
+            CxxCode::InvalidPhase => error::Code::InvalidPhase,
+            CxxCode::UnknownXHCISpeedID => error::Code::UnknownXHCISpeedID,
+            CxxCode::NoWaiter => error::Code::NoWaiter,
+            CxxCode::NoPCIMSI => error::Code::NoPCIMSI,
+            CxxCode::UnknownPixelFormat => error::Code::UnknownPixelFormat,
+            CxxCode::NoSuchTask => error::Code::NoSuchTask,
+            CxxCode::InvalidFormat => error::Code::InvalidFormat,
+            CxxCode::FrameTooSmall => error::Code::FrameTooSmall,
+            CxxCode::InvalidFile => error::Code::InvalidFile,
+            CxxCode::IsDirectory => error::Code::IsDirectory,
+            CxxCode::NoSuchEntry => error::Code::NoSuchEntry,
+            CxxCode::FreeTypeError => error::Code::FreeTypeError,
+            CxxCode::EndpointNotInCharge => error::Code::EndpointNotInCharge,
+        }
+    }
+}
+
+/// C++ 版の [Error] に対応する構造体。
 #[repr(C)]
 pub(crate) struct CxxError {
-    code: error::Code,
+    code: CxxCode,
     line: c_int,
     file: *const c_char,
 }
 
-impl Into<error::Error> for CxxError {
-    fn into(self) -> error::Error {
-        error::Error::new(
-            self.code,
-            unsafe { CStr::from_ptr(self.file) }.to_str().unwrap(),
-            self.line as u32,
-        )
+impl Into<Result<()>> for CxxError {
+    /// C++ 版の [CxxError] から Rust 版の [Result] に変換する。
+    fn into(self) -> Result<()> {
+        match self.code {
+            CxxCode::Success => Ok(()),
+            _ => Err(Error::new(
+                self.code.into(),
+                unsafe { CStr::from_ptr(self.file) }.to_str().unwrap(),
+                self.line as u32,
+            )),
+        }
     }
 }
 
