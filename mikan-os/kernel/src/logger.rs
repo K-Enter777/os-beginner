@@ -34,15 +34,15 @@ macro_rules! log {
     }
 }
 
-// #[export_name = "_Z3LogLogLevelPKcz"]
-// pub(crate) fn log_cpp(level: LogLevel, format: *const c_char) -> i32 {
-//     let s = unsafe { CStr::from_ptr(format) }
-//         .to_str()
-//         .expect("Can't transform.");
+#[export_name = "_Z3Log8LogLevelPKcz"]
+pub(crate) fn log_cpp(level: LogLevel, format: *const c_char) -> i32 {
+    let s = unsafe { CStr::from_ptr(format) }
+        .to_str()
+        .expect("Can't transform.");
 
-//     use crate::{printk, printkln, CONSOLE};
-//     use core::fmt::Write;
-//     log!(level, "{}", s);
+    use crate::{printk, printkln, CONSOLE};
+    use core::fmt::Write;
+    log!(level, "{}", s);
 
-//     return 0;
-// }
+    return 0;
+}
