@@ -347,6 +347,8 @@ fn kernel_entry(
         let mut main_queue = MAIN_QUEUE.write();
 
         if main_queue.len() == 0 {
+            // 待機中ロックがかかったままになるため、明示的にドロップしておく
+            drop(main_queue);
             unsafe {
                 asm!("sti", "hlt");
             }
