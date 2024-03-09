@@ -102,9 +102,10 @@ impl InterruptDescriptor {
     pub(crate) fn set_idt_entry(
         &mut self,
         attr: InterruptDescriptorAttribute,
-        offset: u64,
+        entry: unsafe extern "C" fn(),
         segment_selector: u16,
     ) {
+        let offset = entry as *const fn() as u64;
         self.attr = attr;
         self.offset_low = offset as u16;
         self.offset_middle = (offset >> 16) as u16;

@@ -135,7 +135,7 @@ impl Device {
         let bar = self.read_conf_reg(addr);
 
         // 32 bit アドレス
-        if bar & 4 == 0 {
+        if !bar.get_bit(2) {
             return Ok(bar as u64);
         }
 
@@ -329,7 +329,7 @@ pub(crate) fn read_data() -> u32 {
 /// ベンダ ID レジスタを読み取る（全ヘッダタイプ共通）。
 pub(crate) fn read_vendor_id(bus: u8, device: u8, function: u8) -> u16 {
     write_address(make_address(bus, device, function, 0x00));
-    (read_data() & 0xffff) as u16
+    read_data() as u16
 }
 
 /// デバイス ID レジスタを読み取る（全ヘッダタイプ共通）。
@@ -341,7 +341,7 @@ pub(crate) fn read_device_id(bus: u8, device: u8, function: u8) -> u16 {
 /// ヘッダタイプレジスタを読み取る（全ヘッダタイプ共通）。
 pub(crate) fn read_header_type(bus: u8, device: u8, function: u8) -> u8 {
     write_address(make_address(bus, device, function, 0x0c));
-    ((read_data() >> 16) & 0xff) as u8
+    (read_data() >> 16) as u8
 }
 
 /// クラスコード・レジスタを読み取る（全ヘッダタイプ共通）。
@@ -349,9 +349,9 @@ pub(crate) fn read_class_code(bus: u8, device: u8, function: u8) -> ClassCode {
     write_address(make_address(bus, device, function, 0x08));
     let reg = read_data();
     ClassCode {
-        base: ((reg >> 24) & 0xff) as u8,
-        sub: ((reg >> 16) & 0xff) as u8,
-        interface: ((reg >> 8) & 0xff) as u8,
+        base: (reg >> 24) as u8,
+        sub: (reg >> 16) as u8,
+        interface: (reg >> 8) as u8,
     }
 }
 
@@ -368,7 +368,7 @@ pub(crate) fn read_bus_numbers(bus: u8, device: u8, function: u8) -> u32 {
 
 /// 単一ファンクションの場合に真を返す。
 fn is_single_function_device(header_type: u8) -> bool {
-    header_type & 0x80 == 0
+    !header_type.get_bit(7)
 }
 
 /// [DEVICES] の配列長。

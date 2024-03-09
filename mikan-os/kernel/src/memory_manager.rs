@@ -89,12 +89,7 @@ impl BitmapMemoryManager {
     /// * `memory_map` - メモリ情報。
     /// * `kernel_base` - カーネルが展開されたメモリの先頭。
     /// * `kernel_size` - 展開されたカーネルのサイズ。
-    pub(crate) fn initialize(
-        &self,
-        memory_map: &MemoryMap,
-        kernel_base: usize,
-        kernel_size: usize,
-    ) {
+    pub(crate) fn init(&self, memory_map: &MemoryMap, kernel_base: usize, kernel_size: usize) {
         // 同時に初期化されないようにロックを取得
         let _lock = self.lock.write();
 

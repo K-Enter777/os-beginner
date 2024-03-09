@@ -39,6 +39,7 @@ use uefi::table::boot::MemoryMap;
 
 use crate::{
     asmfunc::{get_cs, load_idt, set_cs_ss, set_ds_all},
+    bitfield::BitField,
     interrupt::{InterruptDescriptor, InterruptDescriptorAttribute, InterruptVector, MessageType},
     logger::{set_log_level, LogLevel},
     usb::{Controller, HIDMouseDriver},
@@ -148,21 +149,20 @@ fn kernel_entry(
     let frame_buffer_config = frame_buffer_config.clone();
 
     // メモリアロケータの初期化
-    memory_manager::GLOBAL.initialize(memory_map, kernel_base, kernel_size);
+    memory_manager::GLOBAL.init(memory_map, kernel_base, kernel_size);
 
+    // ピクセルライターの生成
     let pixel_writer: Box<dyn PixelWriter + Send> = match frame_buffer_config.pixel_format {
         PixelFormat::Rgb => Box::new(RgbResv8BitPerColorPixelWriter::new(frame_buffer_config)),
-
         PixelFormat::Bgr => Box::new(BgrResv8BitPerColorPixelWriter::new(frame_buffer_config)),
     };
-
-    let frame_width = pixel_writer.config().horizontal_resolution as u32;
-    let frame_height = pixel_writer.config().vertical_resolution as u32;
-
     PIXEL_WRITER.init(pixel_writer);
 
     {
         let mut pixel_writer = PIXEL_WRITER.write();
+        let frame_width = pixel_writer.config().horizontal_resolution as u32;
+        let frame_height = pixel_writer.config().vertical_resolution as u32;
+
         // デスクトップ背景の描画
         pixel_writer.fill_rectangle(
             Vector2D::new(0, 0),
@@ -197,6 +197,8 @@ fn kernel_entry(
 
     // welcome 文
     printk!("Welcome to MikanOS!\n");
+
+    // ログレベルの設定
     set_log_level(LogLevel::Warn);
 
     // セグメントの設定
@@ -226,10 +228,10 @@ fn kernel_entry(
     let mut xhc_dev = None;
     {
         let devices = pci::DEVICES.read();
+        let mut intel_found = false;
         for device in &*devices {
             let dev = device;
             let vendor_id = dev.read_vendor_id();
-            let class_code = pci::read_class_code(dev.bus(), dev.device(), dev.function());
             log!(
                 LogLevel::Debug,
                 "{}.{}.{}: vend {:04x}, class {:08x}, head {:02x}",
@@ -237,19 +239,20 @@ fn kernel_entry(
                 dev.device(),
                 dev.function(),
                 vendor_id,
-                class_code,
+                dev.class_code(),
                 dev.header_type()
             );
-        }
 
-        // Intel 製を優先して xHC を探す
-        for device in &*devices {
+            // Intel 製を優先して xHC を探す
             if device.class_code().r#match(0x0c, 0x03, 0x30) {
-                xhc_dev = Some(*device);
-
-                if 0x8086 == xhc_dev.unwrap().read_vendor_id() {
-                    break;
+                if intel_found {
+                    continue;
                 }
+
+                if 0x8086 == vendor_id {
+                    intel_found = true;
+                }
+                xhc_dev = Some(*device);
             }
         }
 
@@ -275,7 +278,7 @@ fn kernel_entry(
                 0,
                 true,
             ),
-            int_handler_xhci as *const fn() as u64,
+            int_handler_xhci,
             cs,
         );
         unsafe {
@@ -300,8 +303,8 @@ fn kernel_entry(
 
     // xHC の BAR から情報を得る
     let xhc_bar = xhc_dev.read_bar(0);
-    log!(LogLevel::Debug, "ReadBar: {:?}", xhc_bar);
-    let xhc_mmio_base = xhc_bar.unwrap() & !0xf;
+    log!(LogLevel::Debug, "ReadBar: {:#x?}", xhc_bar);
+    let xhc_mmio_base = xhc_bar.unwrap().get_bits(4..) << 4;
     log!(LogLevel::Debug, "xHC mmio_base = {:08x}", xhc_mmio_base);
 
     let mut xhc = Controller::new(xhc_mmio_base);
@@ -309,10 +312,9 @@ fn kernel_entry(
     if xhc_dev.read_vendor_id() == 0x8086 {
         switch_ehci2xhci(&xhc_dev);
     }
-    {
-        let result = xhc.initialize();
-        log!(LogLevel::Debug, "xhc.initialize: {:?}", result);
-    }
+
+    let result = xhc.initialize();
+    log!(LogLevel::Debug, "xhc.initialize: {:?}", result);
 
     log!(LogLevel::Info, "xHC starting");
     xhc.run().unwrap();
@@ -355,8 +357,7 @@ fn kernel_entry(
             continue;
         }
 
-        let msg = *main_queue.front().unwrap();
-        main_queue.pop_front();
+        let msg = main_queue.pop_front().unwrap();
         unsafe { asm!("sti") };
 
         match msg.r#type() {
