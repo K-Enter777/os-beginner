@@ -4,17 +4,16 @@ use crate::{
 };
 
 #[repr(packed)]
-#[derive(Clone, Copy)]
-pub(crate) union InterruptDescriptorAttribute {
-    data: u16,
-    bits: InterruptDescriptorAttributeBits,
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct InterruptDescriptorAttribute {
+    etc_1: u8,
+    etc_2: u8,
 }
 
 impl InterruptDescriptorAttribute {
     #![allow(unused)]
-
     pub(crate) const fn const_default() -> Self {
-        Self { data: 0 }
+        Self { etc_1: 0, etc_2: 0 }
     }
 
     pub(crate) fn new(
@@ -22,36 +21,6 @@ impl InterruptDescriptorAttribute {
         descriptor_privilege_level: u8,
         present: bool,
     ) -> Self {
-        Self {
-            bits: InterruptDescriptorAttributeBits::new(
-                r#type,
-                descriptor_privilege_level,
-                present,
-            ),
-        }
-    }
-
-    fn bits(&self) -> InterruptDescriptorAttributeBits {
-        unsafe { self.bits }
-    }
-}
-
-impl Default for InterruptDescriptorAttribute {
-    fn default() -> Self {
-        Self { data: 0 }
-    }
-}
-
-#[repr(packed)]
-#[derive(Debug, Clone, Copy)]
-struct InterruptDescriptorAttributeBits {
-    etc_1: u8,
-    etc_2: u8,
-}
-
-impl InterruptDescriptorAttributeBits {
-    #![allow(unused)]
-    fn new(r#type: SystemSegmentType, descriptor_privilege_level: u8, present: bool) -> Self {
         let mut etc_2 = 0;
         etc_2.set_bits(..4, DescriptorType::system_segment(r#type).into());
         etc_2.set_bits(5..7, descriptor_privilege_level);
@@ -59,20 +28,26 @@ impl InterruptDescriptorAttributeBits {
         Self { etc_1: 0, etc_2 }
     }
 
-    fn interrupt_stack_table(&self) -> u8 {
+    pub(crate) fn interrupt_stack_table(&self) -> u8 {
         self.etc_1 & 0x07
     }
 
-    fn r#type(&self) -> DescriptorType {
+    pub(crate) fn r#type(&self) -> DescriptorType {
         DescriptorType::from(self.etc_2 & 0x0f)
     }
 
-    fn descriptor_privilege_level(&self) -> u8 {
+    pub(crate) fn descriptor_privilege_level(&self) -> u8 {
         (self.etc_2 >> 5) & 0x03
     }
 
-    fn present(&self) -> bool {
+    pub(crate) fn present(&self) -> bool {
         (self.etc_2 >> 7) & 0x01 == 1
+    }
+}
+
+impl Default for InterruptDescriptorAttribute {
+    fn default() -> Self {
+        Self::const_default()
     }
 }
 

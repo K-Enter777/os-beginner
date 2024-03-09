@@ -149,9 +149,7 @@ impl Device {
     }
 
     fn read_capability_header(&self, addr: u8) -> CapabilityHeader {
-        CapabilityHeader {
-            data: self.read_conf_reg(addr),
-        }
+        CapabilityHeader::from_raw(self.read_conf_reg(addr))
     }
 
     fn configure_msi(
@@ -166,12 +164,12 @@ impl Device {
 
         while cap_addr != 0 {
             let header = self.read_capability_header(cap_addr as u8);
-            if header.bits().cap_id() == CAPABILITY_MSI as u32 {
+            if header.cap_id() == CAPABILITY_MSI as u32 {
                 msi_cap_addr = cap_addr;
-            } else if header.bits().cap_id() == CAPABILITY_MSIX as u32 {
+            } else if header.cap_id() == CAPABILITY_MSIX as u32 {
                 msix_cap_addr = cap_addr;
             }
-            cap_addr = header.bits().next_ptr();
+            cap_addr = header.next_ptr();
         }
 
         if msi_cap_addr != 0 {
@@ -193,12 +191,10 @@ impl Device {
     /// * `dev` - MSI ケーパビリティを読み込む PCI デバイス
     /// * `cap_addr` - MSI ケーパビリティレジスタのコンフィギュレーション空間アドレス
     fn read_msi_capability(&self, cap_addr: u8) -> MSICapability {
-        let header = MSICapabilityHeader {
-            data: self.read_conf_reg(cap_addr),
-        };
+        let header = MSICapabilityHeader::from_raw(self.read_conf_reg(cap_addr));
         let msg_addr = self.read_conf_reg(cap_addr + 4);
 
-        let (msg_upper_addr, msg_data_addr) = if header.bits().addr_64_capable() != 0 {
+        let (msg_upper_addr, msg_data_addr) = if header.addr_64_capable() != 0 {
             (self.read_conf_reg(cap_addr + 8), cap_addr + 12)
         } else {
             (0, cap_addr + 8)
@@ -206,7 +202,7 @@ impl Device {
 
         let msg_data = self.read_conf_reg(msg_data_addr);
 
-        let (mask_bits, pending_bits) = if header.bits().per_vector_mask_capable() != 0 {
+        let (mask_bits, pending_bits) = if header.per_vector_mask_capable() != 0 {
             (
                 self.read_conf_reg(msg_data_addr + 4),
                 self.read_conf_reg(msg_data_addr + 8),
@@ -230,7 +226,7 @@ impl Device {
         self.write_conf_reg(cap_addr, header.data());
         self.write_conf_reg(cap_addr + 4, msi_cap.msg_addr);
 
-        let msg_data_addr = if header.bits().addr_64_capable() != 0 {
+        let msg_data_addr = if header.addr_64_capable() != 0 {
             self.write_conf_reg(cap_addr + 8, msi_cap.msg_upper_addr);
             cap_addr + 12
         } else {
@@ -239,7 +235,7 @@ impl Device {
 
         self.write_conf_reg(msg_data_addr, msi_cap.msg_data);
 
-        if header.bits().per_vector_mask_capable() != 0 {
+        if header.per_vector_mask_capable() != 0 {
             self.write_conf_reg(msg_data_addr + 4, msi_cap.mask_bits);
             self.write_conf_reg(msg_data_addr + 8, msi_cap.pending_bits);
         }
@@ -257,8 +253,8 @@ impl Device {
 
         // なんか packed 構造体の要素への参照は UB（未定義動作）らしい
         let header = addr_of_mut!(msi_cap.header);
-        let enable = if unsafe { *header }.bits().multi_msg_capable() <= num_vector_exponent {
-            unsafe { *header }.bits().multi_msg_capable()
+        let enable = if unsafe { *header }.multi_msg_capable() <= num_vector_exponent {
+            unsafe { *header }.multi_msg_capable()
         } else {
             num_vector_exponent
         };
@@ -269,8 +265,8 @@ impl Device {
         // 値を上書きすることだけ
         // （中身は `memcpy` で 1 バイトずつコピーしているっぽい）
         let mut old = unsafe { *header };
-        old.bits_mut().set_multi_msg_enable(enable);
-        old.bits_mut().set_msi_enable(1);
+        old.set_multi_msg_enable(enable);
+        old.set_msi_enable(1);
         unsafe { header.write_unaligned(old) };
 
         msi_cap.msg_addr = msg_addr;
@@ -401,15 +397,23 @@ pub(crate) fn scan_all_bus() -> Result<()> {
     Ok(())
 }
 
+/// PCI ケーパビリティレジスタの共通ヘッダ
 #[derive(Clone, Copy)]
 #[repr(packed)]
-pub(crate) struct CapabilityHeaderBits {
+pub(crate) struct CapabilityHeader {
     cap_id: u8,
     next_ptr: u8,
     cap: u16,
 }
 
-impl CapabilityHeaderBits {
+impl CapabilityHeader {
+    pub(crate) const fn from_raw(value: u32) -> Self {
+        Self {
+            cap_id: value as u8,
+            next_ptr: (value >> 8) as u8,
+            cap: (value >> 16) as u16,
+        }
+    }
     pub(crate) const fn cap_id(&self) -> u32 {
         self.cap_id as u32
     }
@@ -423,42 +427,34 @@ impl CapabilityHeaderBits {
     }
 }
 
-/// PCI ケーパビリティレジスタの共通ヘッダ
-#[repr(packed)]
-pub(crate) union CapabilityHeader {
-    data: u32,
-    bits: CapabilityHeaderBits,
-}
-
-impl CapabilityHeader {
-    fn bits(&self) -> &CapabilityHeaderBits {
-        unsafe { &self.bits }
-    }
-
-    fn bits_mut(&mut self) -> &mut CapabilityHeaderBits {
-        unsafe { &mut self.bits }
-    }
-}
-
-impl CapabilityHeader {
-    pub(crate) const fn new(data: u32) -> Self {
-        Self { data }
-    }
-}
-
 const CAPABILITY_MSI: u8 = 0x05;
 const CAPABILITY_MSIX: u8 = 0x11;
 
 #[derive(Clone, Copy)]
 #[repr(packed)]
-pub(crate) struct MSICapabilityHeaderBits {
+pub(crate) struct MSICapabilityHeader {
     cap_id: u8,
     next_ptr: u8,
     etc_1: u8,
     etc_2: u8,
 }
 
-impl MSICapabilityHeaderBits {
+impl MSICapabilityHeader {
+    pub(crate) const fn from_raw(value: u32) -> Self {
+        Self {
+            cap_id: value as u8,
+            next_ptr: (value >> 8) as u8,
+            etc_1: (value >> 16) as u8,
+            etc_2: (value >> 24) as u8,
+        }
+    }
+
+    pub(crate) fn data(self) -> u32 {
+        self.cap_id as u32
+            | (self.next_ptr as u32) << 8
+            | (self.etc_1 as u32) << 16
+            | (self.etc_2 as u32) << 24
+    }
     pub(crate) fn cap_id(&self) -> u32 {
         self.cap_id as u32
     }
@@ -493,26 +489,6 @@ impl MSICapabilityHeaderBits {
 
     pub(crate) fn per_vector_mask_capable(&self) -> u32 {
         self.etc_2.get_bit(0).into()
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) union MSICapabilityHeader {
-    data: u32,
-    bits: MSICapabilityHeaderBits,
-}
-
-impl MSICapabilityHeader {
-    fn data(&self) -> u32 {
-        unsafe { self.data }
-    }
-
-    fn bits(&self) -> &MSICapabilityHeaderBits {
-        unsafe { &self.bits }
-    }
-
-    fn bits_mut(&mut self) -> &mut MSICapabilityHeaderBits {
-        unsafe { &mut self.bits }
     }
 }
 
