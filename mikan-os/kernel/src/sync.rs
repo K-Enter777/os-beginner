@@ -131,6 +131,11 @@ impl<T> OnceRwLock<T> {
         }
     }
 
+    pub(crate) fn is_initialized(&self) -> bool {
+        let _locker = self.lock();
+        unsafe { &*self.data.get() }.is_some()
+    }
+
     /// [OnceMutex] の初期化を行う。
     ///
     /// * `value` - 設定する値。
