@@ -3,7 +3,6 @@
 use alloc::vec::{self, Vec};
 use core::{
     cell::RefCell,
-    cmp,
     fmt::{self, Display, LowerHex},
     ptr::addr_of_mut,
 };
@@ -252,10 +251,23 @@ impl Device {
     ) -> Result<()> {
         let mut msi_cap = self.read_msi_capability(cap_addr);
 
-        let enable = cmp::min(msi_cap.header.multi_msg_capable(), num_vector_exponent);
+        // なんか packed 構造体の要素への参照は UB（未定義動作）らしい
+        let header = addr_of_mut!(msi_cap.header);
+        let enable = if unsafe { *header }.multi_msg_capable() <= num_vector_exponent {
+            unsafe { *header }.multi_msg_capable()
+        } else {
+            num_vector_exponent
+        };
 
-        msi_cap.header.set_multi_msg_enable(enable);
-        msi_cap.header.set_msi_enable(1);
+        // packed 構造体の参照を生ポインタから使おうとしても、それも UB っぽい
+        // 挙動を見る限りはコピーが起きている（ポインタを見てもそうなっている）
+        // そのため、できることは生ポインタに対して直接 `write_unaligned()` といメソッドで
+        // 値を上書きすることだけ
+        // （中身は `memcpy` で 1 バイトずつコピーしているっぽい）
+        let mut old = unsafe { *header };
+        old.set_multi_msg_enable(enable);
+        old.set_msi_enable(1);
+        unsafe { header.write_unaligned(old) };
 
         msi_cap.msg_addr = msg_addr;
         msi_cap.msg_data = msg_data;
@@ -387,6 +399,7 @@ pub(crate) fn scan_all_bus() -> Result<()> {
 
 /// PCI ケーパビリティレジスタの共通ヘッダ
 #[derive(Clone, Copy)]
+#[repr(packed)]
 pub(crate) struct CapabilityHeader {
     cap_id: u8,
     next_ptr: u8,
@@ -418,6 +431,7 @@ const CAPABILITY_MSI: u8 = 0x05;
 const CAPABILITY_MSIX: u8 = 0x11;
 
 #[derive(Clone, Copy)]
+#[repr(packed)]
 pub(crate) struct MSICapabilityHeader {
     cap_id: u8,
     next_ptr: u8,
@@ -480,6 +494,7 @@ impl MSICapabilityHeader {
 
 /// MSI ケーパビリティ構造は 64 ビットサポートの有無などで亜種が沢山ある。
 /// この構造体は各亜種に対応するために最大の亜種に合わせてメンバを定義してある。
+#[repr(packed)]
 pub(crate) struct MSICapability {
     header: MSICapabilityHeader,
     msg_addr: u32,

@@ -130,7 +130,6 @@ static MAIN_QUEUE: RwLock<VecDeque<Message>> = RwLock::new(VecDeque::new());
 
 #[custom_attribute::interrupt]
 fn int_handler_xhci(_frame: &InterruptFrame) {
-    printkln!("INT");
     MAIN_QUEUE
         .write()
         .push_back(Message::new(MessageType::InteruptXHCI));
@@ -223,17 +222,16 @@ fn kernel_entry(
     ));
 
     // デバイス一覧の表示
-    let err = pci::scan_all_bus();
-    log!(LogLevel::Debug, "scan_all_bus: {:?}", err);
+    let result = pci::scan_all_bus();
+    log!(LogLevel::Debug, "scan_all_bus: {:?}", result);
 
     let mut xhc_dev = None;
     {
         let devices = pci::DEVICES.read();
-        let num_devices = devices.len();
-        for i in 0..num_devices {
-            let dev = devices[i];
-            let vendor_id = pci::read_vendor_id(dev.bus(), dev.device(), dev.function());
-            let class_code = pci::read_class_code(dev.bus(), dev.device(), dev.function());
+        let mut intel_found = false;
+        for device in &*devices {
+            let dev = device;
+            let vendor_id = dev.read_vendor_id();
             log!(
                 LogLevel::Debug,
                 "{}.{}.{}: vend {:04x}, class {:08x}, head {:02x}",
@@ -241,41 +239,72 @@ fn kernel_entry(
                 dev.device(),
                 dev.function(),
                 vendor_id,
-                class_code,
+                dev.class_code(),
                 dev.header_type()
             );
-        }
 
-        // Intel 製を優先して xHC を探す
-        for i in 0..num_devices {
-            if devices[i].class_code().r#match(0x0c, 0x03, 0x30) {
-                xhc_dev = Some(devices[i]);
-
-                if 0x8086 == xhc_dev.unwrap().read_vendor_id() {
-                    break;
+            // Intel 製を優先して xHC を探す
+            if device.class_code().r#match(0x0c, 0x03, 0x30) {
+                if intel_found {
+                    continue;
                 }
+
+                if 0x8086 == vendor_id {
+                    intel_found = true;
+                }
+                xhc_dev = Some(*device);
             }
         }
 
-        if xhc_dev.is_none() {
-            log!(LogLevel::Error, "There is no xHC devices.");
-            halt();
+        if xhc_dev.is_some() {
+            let xhc_dev = xhc_dev.unwrap();
+            log!(
+                LogLevel::Info,
+                "xHC has been found: {}.{}.{}",
+                xhc_dev.bus(),
+                xhc_dev.device(),
+                xhc_dev.function()
+            );
+        }
+    }
+    let mut xhc_dev = xhc_dev.unwrap();
+
+    let cs = unsafe { get_cs() };
+    {
+        let mut idt = IDT.write();
+        idt[InterruptVector::XHCI as usize].set_idt_entry(
+            InterruptDescriptorAttribute::new(
+                x86_descriptor::SystemSegmentType::InterruptGate,
+                0,
+                true,
+            ),
+            int_handler_xhci,
+            cs,
+        );
+        unsafe {
+            load_idt(
+                (size_of::<InterruptDescriptor>() * idt.len()) as u16 - 1,
+                idt.as_ptr() as u64,
+            )
         }
     }
 
-    let xhc_dev = xhc_dev.unwrap();
-    log!(
-        LogLevel::Info,
-        "xHC has been found: {}.{}.{}",
-        xhc_dev.bus(),
-        xhc_dev.device(),
-        xhc_dev.function()
-    );
+    let bsp_local_apic_id = (unsafe { *(0xfee0_0020 as *const u32) } >> 24) as u8;
+    xhc_dev
+        .configure_msi_fixed_destination(
+            bsp_local_apic_id,
+            pci::MSITriggerMode::Level,
+            pci::MSIDeliverMode::Fixed,
+            InterruptVector::XHCI as u8,
+            0,
+        )
+        .unwrap();
+    let xhc_dev = xhc_dev;
 
     // xHC の BAR から情報を得る
     let xhc_bar = xhc_dev.read_bar(0);
-    log!(LogLevel::Debug, "ReadBar: {:?}", xhc_bar);
-    let xhc_mmio_base = xhc_bar.unwrap() & !0xf;
+    log!(LogLevel::Debug, "ReadBar: {:#x?}", xhc_bar);
+    let xhc_mmio_base = xhc_bar.unwrap().get_bits(4..) << 4;
     log!(LogLevel::Debug, "xHC mmio_base = {:08x}", xhc_mmio_base);
 
     let mut xhc = Controller::new(xhc_mmio_base);
@@ -283,36 +312,63 @@ fn kernel_entry(
     if xhc_dev.read_vendor_id() == 0x8086 {
         switch_ehci2xhci(&xhc_dev);
     }
-    {
-        let err = xhc.initialize();
-        log!(LogLevel::Debug, "xhc.initialize: {:?}", err);
-    }
+
+    let result = xhc.initialize();
+    log!(LogLevel::Debug, "xhc.initialize: {:?}", result);
 
     log!(LogLevel::Info, "xHC starting");
     xhc.run().unwrap();
 
+    XHC.init(xhc);
+
     HIDMouseDriver::set_default_observer(mouse_observer);
 
-    for i in 1..=xhc.max_ports() {
-        let mut port = xhc.port_at(i);
-        log!(
-            LogLevel::Debug,
-            "Port {}: IsConnected={}",
-            i,
-            port.is_connected()
-        );
+    {
+        let mut xhc = XHC.write();
 
-        if port.is_connected() {
-            if let Err(err) = xhc.configure_port(&mut port) {
-                log!(LogLevel::Error, "failed to configure port: {}", err);
-                continue;
+        for i in 1..=xhc.max_ports() {
+            let mut port = xhc.port_at(i);
+            log!(
+                LogLevel::Debug,
+                "Port {}: IsConnected={}",
+                i,
+                port.is_connected()
+            );
+
+            if port.is_connected() {
+                if let Err(err) = xhc.configure_port(&mut port) {
+                    log!(LogLevel::Error, "failed to configure port: {}", err);
+                    continue;
+                }
             }
         }
     }
 
     loop {
-        if let Err(err) = xhc.process_event() {
-            log!(LogLevel::Error, "Error while process_event: {}", err);
+        unsafe { asm!("cli") };
+        let mut main_queue = MAIN_QUEUE.write();
+
+        if main_queue.len() == 0 {
+            // 待機中ロックがかかったままになるため、明示的にドロップしておく
+            drop(main_queue);
+            unsafe {
+                asm!("sti", "hlt");
+            }
+            continue;
+        }
+
+        let msg = main_queue.pop_front().unwrap();
+        unsafe { asm!("sti") };
+
+        match msg.r#type() {
+            MessageType::InteruptXHCI => {
+                let mut xhc = XHC.write();
+                while xhc.primary_event_ring().has_front() {
+                    if let Err(err) = xhc.process_event() {
+                        log!(LogLevel::Error, "Error while process_evnet: {}", err);
+                    }
+                }
+            }
         }
     }
 }
