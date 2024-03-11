@@ -62,6 +62,7 @@ impl<T> RwLock<T> {
             if prev_count >= UNUSED && prev_count <= BORROW_MAX {
                 break;
             }
+            self.counter.fetch_sub(1, Ordering::Release);
         }
 
         RwRead {
@@ -81,6 +82,7 @@ impl<T> RwLock<T> {
             if prev_count == UNUSED {
                 break;
             }
+            self.counter.fetch_add(1, Ordering::Release);
         }
 
         RwWrite {
@@ -138,6 +140,7 @@ impl<T> OnceRwLock<T> {
     ///
     /// 既に初期化されている場合は初期化されない。
     pub(crate) fn init(&self, value: T) -> bool {
+        let _locker = self.lock();
         while let Err(_) =
             self.counter
                 .compare_exchange(0, -1, Ordering::Release, Ordering::Relaxed)
@@ -193,6 +196,7 @@ impl<T> OnceRwLock<T> {
             if prev_count >= UNUSED && prev_count <= BORROW_MAX {
                 break;
             }
+            self.counter.fetch_sub(1, Ordering::Release);
         }
 
         match unsafe { (*self.data.get()).as_ref() } {
@@ -218,12 +222,14 @@ impl<T> OnceRwLock<T> {
     /// `None` が返ること。
     pub(crate) fn write_checked(&self) -> Option<RwWrite<'_, T>> {
         loop {
+            let _locker = self.lock();
             let prev_count = self.counter.fetch_sub(1, Ordering::Release);
             // 元々参照が作られていない場合に、新たに可変参照を作って返す。
             // それまでは待機する。
             if prev_count == UNUSED {
                 break;
             }
+            self.counter.fetch_add(1, Ordering::Release);
         }
 
         match unsafe { (*self.data.get()).as_mut() } {
