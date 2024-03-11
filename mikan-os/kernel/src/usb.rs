@@ -96,6 +96,7 @@ impl Controller {
 pub(crate) struct DeviceManager {
     device_context_pointers: *mut *mut (), // 本当は DeviceContext**
     max_slots: c_ulong,
+    devices: *mut *mut (), // 本当は Device**
 }
 
 #[repr(C)]
