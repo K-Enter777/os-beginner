@@ -38,7 +38,7 @@ use sync::{OnceRwLock, RwLock};
 use uefi::table::boot::MemoryMap;
 
 use crate::{
-    asmfunc::{get_cs, load_idt, set_cs_ss, set_ds_all},
+    asmfunc::{cli, get_cs, load_idt, set_cs_ss, set_ds_all, sti, sti_hlt},
     bitfield::BitField,
     interrupt::{InterruptDescriptor, InterruptDescriptorAttribute, InterruptVector, MessageType},
     logger::{set_log_level, LogLevel},
@@ -341,23 +341,21 @@ fn kernel_entry(
     }
 
     loop {
-        unsafe { asm!("cli") };
+        cli();
         let msg = {
             let mut main_queue = MAIN_QUEUE.write();
 
             if main_queue.len() == 0 {
                 // 待機中ロックがかかったままになるため、明示的にドロップしておく
                 drop(main_queue);
-                unsafe {
-                    asm!("sti", "hlt");
-                }
+                sti_hlt();
                 continue;
             }
 
             main_queue.pop_front().unwrap()
             // 割り込みを許可する前に MAIN_QUEUE のロック解除
         };
-        unsafe { asm!("sti") };
+        sti();
 
         match msg.r#type() {
             MessageType::InteruptXHCI => {

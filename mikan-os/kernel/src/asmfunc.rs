@@ -1,4 +1,4 @@
-use core::arch::global_asm;
+use core::arch::{asm, global_asm};
 
 pub(crate) fn io_out_32(addr: u16, data: u32) {
     unsafe { io_out_32_unsafe(addr, data) }
@@ -30,6 +30,18 @@ pub(crate) fn set_cs_ss(cs: u16, ss: u16) {
 
 pub(crate) fn set_cr3(value: u64) {
     unsafe { set_cr3_unsafe(value) }
+}
+
+pub(crate) fn sti() {
+    unsafe { asm!("sti") }
+}
+
+pub(crate) fn sti_hlt() {
+    unsafe { asm!("sti", "hlt") }
+}
+
+pub(crate) fn cli() {
+    unsafe { asm!("cli") }
 }
 
 extern "C" {
