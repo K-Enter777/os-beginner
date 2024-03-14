@@ -1,14 +1,12 @@
 use core::{
     alloc::{GlobalAlloc, Layout},
-    cell::UnsafeCell,
     mem::size_of,
-    ops::{Index, IndexMut},
     ptr,
 };
 
 use uefi::table::boot::MemoryMap;
 
-use crate::{bitfield::BitField, memory_map};
+use crate::{bitfield::BitField, memory_map, sync::RwLock};
 
 /// グローバルアロケータ。
 #[global_allocator]
@@ -63,31 +61,47 @@ const FRAME_COUNT: usize = MAX_PHYSICAL_MEMORY / BYTES_PER_FRAME;
 
 const UEFI_PAGE_SIZE: usize = 4 * KIB;
 
+/// ビットを使ってメモリの使用可能領域を管理する構造体。
 pub(crate) struct BitmapMemoryManager {
-    alloc_map: UnsafeCell<[MapLineType; FRAME_COUNT / BITS_PER_MAP_LINE]>,
-    range_begin: UnsafeCell<FrameId>,
-    range_end: UnsafeCell<FrameId>,
-    is_initialized: UnsafeCell<bool>,
+    /// フレームが使用可能かどうかを保持しておく。
+    alloc_map: RwLock<[MapLineType; FRAME_COUNT / BITS_PER_MAP_LINE]>,
+    /// 使用可能領域の最初のフレーム。
+    range_begin: RwLock<FrameId>,
+    /// 使用可能領域の最後のフレーム。
+    range_end: RwLock<FrameId>,
+    /// ロック。
+    lock: RwLock<()>,
 }
 
 impl BitmapMemoryManager {
     /// [BitmapMemoryManager] を作る。
     const fn new() -> Self {
         Self {
-            alloc_map: UnsafeCell::new([0; FRAME_COUNT / BITS_PER_MAP_LINE]),
-            range_begin: UnsafeCell::new(FrameId::new(0)),
-            range_end: UnsafeCell::new(FrameId::new(0)),
-            is_initialized: UnsafeCell::new(false),
+            alloc_map: RwLock::new([0; FRAME_COUNT / BITS_PER_MAP_LINE]),
+            range_begin: RwLock::new(FrameId::new(0)),
+            range_end: RwLock::new(FrameId::new(0)),
+            lock: RwLock::new(()),
         }
     }
 
-    pub(crate) fn initialize(&self, memory_map: &MemoryMap) {
-        if unsafe { *self.is_initialized.get() } {
+    /// [MemoryMap] を元に [BitmapMemoryManager] を初期化する。
+    ///
+    /// * `memory_map` - メモリ情報。
+    /// * `kernel_base` - カーネルが展開されたメモリの先頭。
+    /// * `kernel_size` - 展開されたカーネルのサイズ。
+    pub(crate) fn init(&self, memory_map: &MemoryMap, kernel_base: usize, kernel_size: usize) {
+        // 同時に初期化されないようにロックを取得
+        let _lock = self.lock.write();
+
+        // 使用可能領域の最初が 0 でない場合は初期化済み
+        if self.range_begin.read().id() != 0 {
             return;
         }
 
         let mut available_end = 0;
         for desc in memory_map.entries() {
+            // available_end から desc.phys_start までは使用不可能領域のはずだから、
+            // そこを割り当て済みとする
             if available_end < desc.phys_start as usize {
                 self.mark_allocated(
                     FrameId::from_addr(available_end),
@@ -98,56 +112,78 @@ impl BitmapMemoryManager {
             let phys_end = desc.phys_start as usize + desc.page_count as usize * UEFI_PAGE_SIZE;
             if memory_map::is_available(desc.ty) {
                 available_end = phys_end;
-            } else {
-                // REVIEW: 以下のコメントアウトは要らないと思うが……
-                // self.mark_allocated(
-                //     FrameId::from_addr(desc.phys_start as usize),
-                //     get_num_frames(desc.page_count as usize * UEFI_PAGE_SIZE),
-                // );
             }
         }
 
-        unsafe {
-            *self.range_begin.get() = FrameId::new(1);
-            *self.range_end.get() = FrameId::from_addr(available_end);
-            *self.is_initialized.get() = true;
-        }
+        self.mark_allocated(FrameId::from_addr(kernel_base), get_num_frames(kernel_size));
+
+        *self.range_begin.write() = FrameId::new(1);
+        *self.range_end.write() = FrameId::from_addr(available_end);
     }
 
+    /// あるフレームから数フレームを割り当て済みにする。
+    ///
+    /// * `start_frame` - 割り当て済みにする最初のフレーム。
+    /// * `num_frames` - 割り当て済みにするフレームの数。
     fn mark_allocated(&self, start_frame: FrameId, num_frames: usize) {
-        // OPTIMIZE: まとめてセットできるようにした方が良い
-        for i in 0..num_frames {
-            self.set_bit(FrameId::new(start_frame.id() + i), true);
-        }
+        self.set_bits(start_frame, num_frames, true);
     }
 
+    /// 指定されたフレームが割り当て済みかどうかを返す。
+    ///
+    /// * `frame` - 割り当て済みか判定するフレーム。
     fn is_allocated(&self, frame: FrameId) -> bool {
         let line_index = frame.id() / BITS_PER_MAP_LINE;
         let bit_index = frame.id() % BITS_PER_MAP_LINE;
 
-        unsafe { &*self.alloc_map.get() }
-            .index(line_index)
-            .get_bit(bit_index as u32)
+        self.alloc_map.read()[line_index].get_bit(bit_index as u32)
     }
 
+    /// 指定されたフレームが割り当て済みかどうかを変更する。
+    ///
+    /// * `frame` - 変更するフレーム。
+    /// * `allocated` - 割り当て済みかどうか。
     fn set_bit(&self, frame: FrameId, allocated: bool) {
         let line_index = frame.id() / BITS_PER_MAP_LINE;
         let bit_index = frame.id() % BITS_PER_MAP_LINE;
 
-        let map = unsafe { &mut *self.alloc_map.get() }.index_mut(line_index);
-        map.set_bit(bit_index as u32, allocated);
+        let mut map = self.alloc_map.write();
+        map[line_index].set_bit(bit_index as u32, allocated);
+    }
+
+    /// 指定されたフレームから数フレームが割り当て済みかどうかを変更する。
+    ///
+    /// * `frame` - 最初のフレーム。
+    /// * `num_frames` - 変更するフレームの数。
+    /// * `allocated` - 割り当て済みかどうか。
+    fn set_bits(&self, frame: FrameId, mut num_frames: usize, allocated: bool) {
+        let allocated = if allocated { MapLineType::MAX } else { 0 };
+
+        let mut line_index = frame.id() / BITS_PER_MAP_LINE;
+        let mut bit_index = frame.id() % BITS_PER_MAP_LINE;
+
+        let mut map = self.alloc_map.write();
+        while num_frames > 0 {
+            if bit_index + num_frames > BITS_PER_MAP_LINE {
+                map[line_index].set_bits(bit_index as u32..BITS_PER_MAP_LINE as u32, allocated);
+                num_frames -= BITS_PER_MAP_LINE - bit_index;
+            } else {
+                map[line_index]
+                    .set_bits(bit_index as u32..(bit_index + num_frames) as u32, allocated);
+                num_frames -= num_frames;
+            }
+            line_index += 1;
+            bit_index = 0;
+        }
     }
 }
 
-// FIXME: これは今は大丈夫だが、マルチタスクが始まったら問題になる。
-unsafe impl Send for BitmapMemoryManager {}
-unsafe impl Sync for BitmapMemoryManager {}
-
 unsafe impl GlobalAlloc for BitmapMemoryManager {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if !*self.is_initialized.get() {
-            return ptr::null_mut();
-        }
+        // 他のスレッドが同時に空き領域を探して、
+        // 空いていた領域を同時に割り当てないようにするため、
+        // ロックを取得
+        let _lock = self.lock.write();
 
         let num_frames = get_num_frames(layout.size());
 
@@ -155,7 +191,7 @@ unsafe impl GlobalAlloc for BitmapMemoryManager {
         let align_frames = layout.align() / BYTES_PER_FRAME;
         let align_frames = if align_frames == 0 { 1 } else { align_frames };
 
-        let mut start_frame_id = (*self.range_begin.get()).id();
+        let mut start_frame_id = self.range_begin.read().id();
         loop {
             // アラインメント調整
             let res = start_frame_id % align_frames;
@@ -165,7 +201,7 @@ unsafe impl GlobalAlloc for BitmapMemoryManager {
 
             let mut i = 0;
             while i < num_frames {
-                if start_frame_id + i >= (*self.range_end.get()).id() {
+                if start_frame_id + i >= self.range_end.read().id() {
                     return ptr::null_mut();
                 }
                 if self.is_allocated(FrameId::new(start_frame_id + i)) {

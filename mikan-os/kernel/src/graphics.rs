@@ -34,12 +34,12 @@ impl PixelColor {
 /// ピクセルを塗るための色々を提供する。
 pub(crate) trait PixelWriter {
     /// ピクセルを塗る手段を提供する。
-    fn write(&self, pos: Vector2D<u32>, color: &PixelColor);
+    fn write(&mut self, pos: Vector2D<u32>, color: &PixelColor);
     /// フレームバッファの情報を提供する。
     fn config(&self) -> &FrameBufferConfig;
 
     /// ピクセルの位置から、そのピクセルを塗るための配列を提供する。
-    fn pixel_at(&self, pos: Vector2D<u32>) -> &mut [u8] {
+    fn pixel_at(&mut self, pos: Vector2D<u32>) -> &mut [u8] {
         unsafe {
             slice::from_raw_parts_mut(
                 (self.config().frame_buffer
@@ -87,7 +87,7 @@ impl RgbResv8BitPerColorPixelWriter {
 }
 
 impl PixelWriter for RgbResv8BitPerColorPixelWriter {
-    fn write(&self, pos: Vector2D<u32>, color: &PixelColor) {
+    fn write(&mut self, pos: Vector2D<u32>, color: &PixelColor) {
         let pixel = self.pixel_at(pos);
         pixel[0] = color.r;
         pixel[1] = color.g;
@@ -112,7 +112,7 @@ impl BgrResv8BitPerColorPixelWriter {
 }
 
 impl PixelWriter for BgrResv8BitPerColorPixelWriter {
-    fn write(&self, pos: Vector2D<u32>, color: &PixelColor) {
+    fn write(&mut self, pos: Vector2D<u32>, color: &PixelColor) {
         let pixel = self.pixel_at(pos);
         pixel[0] = color.b;
         pixel[1] = color.g;

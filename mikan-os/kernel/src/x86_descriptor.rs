@@ -3,7 +3,7 @@ use crate::bitfield::BitField;
 /// ディスクリプタの種類を（ビットフィールドとして）表す。
 /// 内部は [SystemSegmentType] もしくは [CodeDataSegmentType] が入っている。
 ///
-/// ディスクリプタには2種類あり、ディスクリプタの6バイト目、[4:0] ビットで表現されている。
+/// ディスクリプタには2種類あり、ディスクリプタの6バイト目、\[4:0\] ビットで表現されている。
 /// 4ビット目（S: Descriptor type bit）がどちらのディスクリプタであるかを表し、
 ///
 /// 4ビット目が立っている場合は、
@@ -11,7 +11,7 @@ use crate::bitfield::BitField;
 ///
 /// 4ビット目が立っていない場合、
 /// メモリセグメント以外の情報を含んでいるシステムセグメントであることを表す。
-/// [3:0] ビットが具体的にどのようなタイプであるかを表す。
+/// \[3:0\] ビットが具体的にどのようなタイプであるかを表す。
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DescriptorType(u8);
 
@@ -113,6 +113,7 @@ pub(crate) enum DescriptorTypeEnum {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[repr(u8)]
 pub(crate) enum SystemSegmentType {
     // system セグメント、ゲートディスクリプタ
     Upper8Byte = 0,

@@ -1,98 +1,53 @@
-use core::convert::From;
-
-pub(crate) enum DescriptorType {
-    Upper8Bytes = 0,
-    LDT = 2,
-    TSSAvailable = 9,
-    TSSBusy = 11,
-    CallGate = 12,
-    InterruptGate = 14,
-    TrapGate = 15,
-}
-
-impl From<u8> for DescriptorType {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => Self::Upper8Bytes,
-            2 => Self::LDT,
-            9 => Self::TSSAvailable,
-            11 => Self::TSSBusy,
-            12 => Self::CallGate,
-            14 => Self::InterruptGate,
-            15 => Self::TrapGate,
-            _ => panic!(),
-        }
-    }
-}
+use crate::{
+    bitfield::BitField,
+    x86_descriptor::{DescriptorType, SystemSegmentType},
+};
 
 #[repr(packed)]
-#[derive(Clone, Copy)]
-pub(crate) union InterruptDescriptorAttribute {
-    data: u16,
-    bits: InterruptDescriptorAttributeBits,
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct InterruptDescriptorAttribute {
+    etc_1: u8,
+    etc_2: u8,
 }
 
 impl InterruptDescriptorAttribute {
     #![allow(unused)]
-
     pub(crate) const fn const_default() -> Self {
-        Self { data: 0 }
+        Self { etc_1: 0, etc_2: 0 }
     }
 
-    pub(crate) const fn new(
-        r#type: DescriptorType,
+    pub(crate) fn new(
+        r#type: SystemSegmentType,
         descriptor_privilege_level: u8,
         present: bool,
     ) -> Self {
-        Self {
-            bits: InterruptDescriptorAttributeBits::new(
-                r#type,
-                descriptor_privilege_level,
-                present,
-            ),
-        }
+        let mut etc_2 = 0;
+        etc_2.set_bits(..4, DescriptorType::system_segment(r#type).into());
+        etc_2.set_bits(5..7, descriptor_privilege_level);
+        etc_2.set_bit(7, present);
+        Self { etc_1: 0, etc_2 }
     }
 
-    fn bits(&self) -> InterruptDescriptorAttributeBits {
-        unsafe { self.bits }
+    pub(crate) fn interrupt_stack_table(&self) -> u8 {
+        self.etc_1 & 0x07
+    }
+
+    pub(crate) fn r#type(&self) -> DescriptorType {
+        DescriptorType::from(self.etc_2 & 0x0f)
+    }
+
+    pub(crate) fn descriptor_privilege_level(&self) -> u8 {
+        (self.etc_2 >> 5) & 0x03
+    }
+
+    pub(crate) fn present(&self) -> bool {
+        (self.etc_2 >> 7) & 0x01 == 1
     }
 }
 
 impl Default for InterruptDescriptorAttribute {
     fn default() -> Self {
-        Self { data: 0 }
-    }
-}
-
-#[repr(packed)]
-#[derive(Debug, Clone, Copy)]
-struct InterruptDescriptorAttributeBits {
-    etc_1: u8,
-    etc_2: u8,
-}
-
-impl InterruptDescriptorAttributeBits {
-    #![allow(unused)]
-    const fn new(r#type: DescriptorType, descriptor_privilege_level: u8, present: bool) -> Self {
-        let etc_2 =
-            (if present { 1 } else { 0 } << 7) | (descriptor_privilege_level << 5) | r#type as u8;
-        Self { etc_1: 0, etc_2 }
-    }
-
-    fn interrupt_stack_table(&self) -> u8 {
-        self.etc_1 & 0x07
-    }
-
-    fn r#type(&self) -> DescriptorType {
-        DescriptorType::from(self.etc_2 & 0x0f)
-    }
-
-    fn descriptor_privilege_level(&self) -> u8 {
-        (self.etc_2 >> 5) & 0x03
-    }
-
-    fn present(&self) -> bool {
-        (self.etc_2 >> 7) & 0x01 == 1
+        Self::const_default()
     }
 }
 
@@ -122,9 +77,10 @@ impl InterruptDescriptor {
     pub(crate) fn set_idt_entry(
         &mut self,
         attr: InterruptDescriptorAttribute,
-        offset: u64,
+        entry: unsafe extern "C" fn(),
         segment_selector: u16,
     ) {
+        let offset = entry as *const fn() as u64;
         self.attr = attr;
         self.offset_low = offset as u16;
         self.offset_middle = (offset >> 16) as u16;

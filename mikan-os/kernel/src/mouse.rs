@@ -1,4 +1,9 @@
-use crate::graphics::{PixelColor, PixelWriter, Vector2D};
+use alloc::boxed::Box;
+
+use crate::{
+    graphics::{PixelColor, PixelWriter, Vector2D},
+    sync::OnceRwLock,
+};
 
 /// マウスカーソルの横幅
 const MOUSE_CURSOR_WIDTH: usize = 15;
@@ -32,15 +37,15 @@ const MOUSE_CURSOR_SHAPE: [&[u8; MOUSE_CURSOR_WIDTH]; MOUSE_CURSOR_HEIGHT] = [
     b"         @@@   ",
 ];
 
-pub(crate) struct MouseCursor<'a> {
-    pixel_writer: &'a dyn PixelWriter,
+pub(crate) struct MouseCursor {
+    pixel_writer: &'static OnceRwLock<Box<dyn PixelWriter + Send>>,
     erase_color: PixelColor,
     position: Vector2D<u32>,
 }
 
-impl<'a> MouseCursor<'a> {
+impl MouseCursor {
     pub(crate) fn new(
-        writer: &'a dyn PixelWriter,
+        writer: &'static OnceRwLock<Box<dyn PixelWriter + Send>>,
         erase_color: PixelColor,
         initial_position: Vector2D<u32>,
     ) -> Self {
@@ -63,12 +68,12 @@ impl<'a> MouseCursor<'a> {
         for dy in 0..MOUSE_CURSOR_HEIGHT {
             for dx in 0..MOUSE_CURSOR_WIDTH {
                 if MOUSE_CURSOR_SHAPE[dy][dx] == b'@' {
-                    self.pixel_writer.write(
+                    self.pixel_writer.write().write(
                         self.position + Vector2D::new(dx as u32, dy as u32),
                         &PixelColor::new(0, 0, 0),
                     );
                 } else if MOUSE_CURSOR_SHAPE[dy][dx] == b'.' {
-                    self.pixel_writer.write(
+                    self.pixel_writer.write().write(
                         self.position + Vector2D::new(dx as u32, dy as u32),
                         &PixelColor::new(255, 255, 255),
                     );
@@ -81,7 +86,7 @@ impl<'a> MouseCursor<'a> {
         for dy in 0..MOUSE_CURSOR_HEIGHT {
             for dx in 0..MOUSE_CURSOR_WIDTH {
                 if MOUSE_CURSOR_SHAPE[dy][dx] != b' ' {
-                    self.pixel_writer.write(
+                    self.pixel_writer.write().write(
                         self.position + Vector2D::new(dx as u32, dy as u32),
                         &self.erase_color,
                     )
