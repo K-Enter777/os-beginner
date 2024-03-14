@@ -19,7 +19,13 @@ use proc_macro2::Span;
 ///
 /// 引数は以下のようにして指定する。
 /// * `stack_point` - スタック
-/// * `stack_size` - スタックのサイズ
+/// * `stack_size` - スタックのサイズを保持する定数名と、そのスタックサイズ
+///
+/// # Example
+/// ```
+/// #[kernel_entry(KERNEL_STACK, KERNEL_STACK_SIZE = 2 * 1024)]
+/// fn kernel_entry() { }
+/// ```
 #[proc_macro_attribute]
 pub fn kernel_entry(attr: TokenStream, item: TokenStream) -> TokenStream {
     // 引数の処理
@@ -65,23 +71,71 @@ pub fn kernel_entry(attr: TokenStream, item: TokenStream) -> TokenStream {
         transformed_exprs.push(ts);
     }
 
-    // 2つ目の引数が stack_size
-    let stack_size = transformed_exprs.pop().unwrap();
-    let stack_size = parse_macro_input!(stack_size as Expr);
+    // 2つ目の引数が stack_size の宣言
+    let mut arg2 = transformed_exprs.pop().unwrap().into_iter();
+
+    // スタックのサイズを保持する定数名を取得
+    let maybe_stack_size_name = arg2.next().unwrap();
+    let stack_size_name = match maybe_stack_size_name {
+        TokenTree::Ident(name) => name,
+        _ => {
+            return syn::Error::new(
+                maybe_stack_size_name.span().into(),
+                "スタックの大きさを保持する定数の名前を入力してください。",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+    // stack_size_name を syn の Ident に変換
+    let stack_size_name: TokenTree = stack_size_name.into();
+    let stack_size_name: TokenStream = stack_size_name.into();
+    let stack_size_name = parse_macro_input!(stack_size_name as Ident);
+
+    // 次が等号であることの確認
+    let maybe_equal_sign = match arg2.next() {
+        None => {
+            return syn::Error::new(stack_size_name.span().into(), "等号が必要です。")
+                .to_compile_error()
+                .into()
+        }
+        Some(sign) => sign,
+    };
+    let maybe_equal_sign_span = maybe_equal_sign.span();
+    match maybe_equal_sign {
+        TokenTree::Punct(pnc) => {
+            if pnc.as_char() != '=' {
+                return syn::Error::new(maybe_equal_sign_span.into(), "等号が必要です。")
+                    .to_compile_error()
+                    .into();
+            }
+        }
+        _ => {
+            return syn::Error::new(maybe_equal_sign_span.into(), "等号が必要です。")
+                .to_compile_error()
+                .into()
+        }
+    };
+
+    // スタックのサイズを取得
+    let maybe_stack_size = arg2.collect::<TokenStream>().into();
+    let stack_size = parse_macro_input!(maybe_stack_size as Expr);
     let stack_size_span = stack_size.span();
     let stack_size = match into_int(stack_size) {
         Ok(size) => size,
         Err(e) => return e,
     };
 
-    if stack_size <= 0 {
+    let stack_size = if stack_size <= 0 {
         return syn::Error::new(
             stack_size_span,
             "スタックサイズは正の整数である必要があります。",
         )
         .to_compile_error()
         .into();
-    }
+    } else {
+        stack_size as usize
+    };
 
     // スタック用変数の名前を得る
     let stack_name = transformed_exprs.pop().unwrap();
@@ -133,6 +187,8 @@ pub fn kernel_entry(attr: TokenStream, item: TokenStream) -> TokenStream {
     );
 
     let caller = quote! {
+        const #stack_size_name: usize = #stack_size;
+
         extern "C" {
             fn #old_entry_name();
         }
