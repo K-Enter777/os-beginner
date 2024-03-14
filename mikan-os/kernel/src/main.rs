@@ -48,12 +48,12 @@ use crate::{
 /// カーネル用スタック
 #[repr(align(16))]
 struct KernelStack {
-    _buf: [u8; 1024 * 1024],
+    _buf: [u8; STACK_SIZE],
 }
 impl KernelStack {
     const fn new() -> Self {
         Self {
-            _buf: [0; 1024 * 1024],
+            _buf: [0; STACK_SIZE],
         }
     }
 }
@@ -138,7 +138,7 @@ fn int_handler_xhci(_frame: &InterruptFrame) {
 
 // この呼び出しの前にスタック領域を変更するため、でかい構造体をそのまま渡せなくなる
 // それを避けるために参照で渡す
-#[custom_attribute::kernel_entry(KERNEL_MAIN_STACK, 1024 * 1024)]
+#[custom_attribute::kernel_entry(KERNEL_MAIN_STACK, STACK_SIZE = 1024 * 1024)]
 fn kernel_entry(
     frame_buffer_config: &'static FrameBufferConfig,
     memory_map: &'static MemoryMap,
@@ -346,18 +346,21 @@ fn kernel_entry(
 
     loop {
         unsafe { asm!("cli") };
-        let mut main_queue = MAIN_QUEUE.write();
+        let msg = {
+            let mut main_queue = MAIN_QUEUE.write();
 
-        if main_queue.len() == 0 {
-            // 待機中ロックがかかったままになるため、明示的にドロップしておく
-            drop(main_queue);
-            unsafe {
-                asm!("sti", "hlt");
+            if main_queue.len() == 0 {
+                // 待機中ロックがかかったままになるため、明示的にドロップしておく
+                drop(main_queue);
+                unsafe {
+                    asm!("sti", "hlt");
+                }
+                continue;
             }
-            continue;
-        }
 
-        let msg = main_queue.pop_front().unwrap();
+            main_queue.pop_front().unwrap()
+            // 割り込みを許可する前に MAIN_QUEUE のロック解除
+        };
         unsafe { asm!("sti") };
 
         match msg.r#type() {
