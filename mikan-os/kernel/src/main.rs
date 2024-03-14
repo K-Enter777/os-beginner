@@ -206,10 +206,8 @@ fn kernel_entry(
 
     const KERNEL_CS: u16 = 1 << 3;
     const KERNEL_SS: u16 = 2 << 3;
-    unsafe {
-        set_ds_all(0);
-        set_cs_ss(KERNEL_CS, KERNEL_SS);
-    }
+    set_ds_all(0);
+    set_cs_ss(KERNEL_CS, KERNEL_SS);
 
     // ページングの設定
     paging::setup_indentity_page_table();
@@ -269,7 +267,7 @@ fn kernel_entry(
     }
     let mut xhc_dev = xhc_dev.unwrap();
 
-    let cs = unsafe { get_cs() };
+    let cs = get_cs();
     {
         let mut idt = IDT.write();
         idt[InterruptVector::XHCI as usize].set_idt_entry(
@@ -281,12 +279,10 @@ fn kernel_entry(
             int_handler_xhci,
             cs,
         );
-        unsafe {
-            load_idt(
-                (size_of::<InterruptDescriptor>() * idt.len()) as u16 - 1,
-                idt.as_ptr() as u64,
-            )
-        }
+        load_idt(
+            (size_of::<InterruptDescriptor>() * idt.len()) as u16 - 1,
+            idt.as_ptr() as u64,
+        )
     }
 
     let bsp_local_apic_id = (unsafe { *(0xfee0_0020 as *const u32) } >> 24) as u8;

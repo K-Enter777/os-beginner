@@ -64,5 +64,5 @@ pub(crate) fn setup_indentity_page_table() {
         }
     }
 
-    unsafe { set_cr3(pml4_table.as_ptr() as u64) };
+    set_cr3(pml4_table.as_ptr() as u64);
 }

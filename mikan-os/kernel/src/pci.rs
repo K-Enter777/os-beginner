@@ -305,21 +305,17 @@ impl Device {
 
 /// CONFIG_ADDRESS に指定された整数を書き込む。
 pub(crate) fn write_address(address: u32) {
-    unsafe {
-        io_out_32(CONFIG_ADDRESS, address);
-    }
+    io_out_32(CONFIG_ADDRESS, address);
 }
 
 /// CONFIG_DATA に指定された整数を書き込む。
 pub(crate) fn write_data(value: u32) {
-    unsafe {
-        io_out_32(CONFIG_DATA, value);
-    }
+    io_out_32(CONFIG_DATA, value);
 }
 
 /// CONFIG_DATA から 32 ビット整数を読み込む。
 pub(crate) fn read_data() -> u32 {
-    unsafe { io_in_32(CONFIG_DATA) }
+    io_in_32(CONFIG_DATA)
 }
 
 /// ベンダ ID レジスタを読み取る（全ヘッダタイプ共通）。
