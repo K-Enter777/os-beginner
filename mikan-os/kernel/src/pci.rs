@@ -3,6 +3,7 @@
 use alloc::vec::{self, Vec};
 use core::{
     cell::RefCell,
+    cmp::min,
     fmt::{self, Display, LowerHex},
     ptr::addr_of_mut,
 };
@@ -11,7 +12,7 @@ use crate::{
     asmfunc::{io_in_32, io_out_32},
     bitfield::BitField,
     error::{self, Result},
-    make_error,
+    make_error, printkln,
     sync::RwLock,
 };
 
@@ -251,23 +252,9 @@ impl Device {
     ) -> Result<()> {
         let mut msi_cap = self.read_msi_capability(cap_addr);
 
-        // なんか packed 構造体の要素への参照は UB（未定義動作）らしい
-        let header = addr_of_mut!(msi_cap.header);
-        let enable = if unsafe { *header }.multi_msg_capable() <= num_vector_exponent {
-            unsafe { *header }.multi_msg_capable()
-        } else {
-            num_vector_exponent
-        };
-
-        // packed 構造体の参照を生ポインタから使おうとしても、それも UB っぽい
-        // 挙動を見る限りはコピーが起きている（ポインタを見てもそうなっている）
-        // そのため、できることは生ポインタに対して直接 `write_unaligned()` といメソッドで
-        // 値を上書きすることだけ
-        // （中身は `memcpy` で 1 バイトずつコピーしているっぽい）
-        let mut old = unsafe { *header };
-        old.set_multi_msg_enable(enable);
-        old.set_msi_enable(1);
-        unsafe { header.write_unaligned(old) };
+        let enable = min(msi_cap.header.multi_msg_capable(), num_vector_exponent);
+        msi_cap.header.set_multi_msg_enable(enable);
+        msi_cap.header.set_msi_enable(1);
 
         msi_cap.msg_addr = msg_addr;
         msi_cap.msg_data = msg_data;

@@ -22,9 +22,7 @@ pub(crate) enum LogLevel {
 static LOG_LEVEL: RwLock<LogLevel> = RwLock::new(LogLevel::Warn);
 
 pub(crate) fn set_log_level(level: LogLevel) {
-    unsafe {
-        *LOG_LEVEL.write() = level;
-    }
+    *LOG_LEVEL.write() = level;
 }
 
 pub(crate) fn get_log_level() -> LogLevel {
